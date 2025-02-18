@@ -1,0 +1,171 @@
+# app.py
+import streamlit as st
+import pandas as pd
+from database import get_connection, create_tables, load_metrics_from_db, load_daily_data_from_db, find_orphaned_metrics
+from populate_database import bulk_populate_database_from_csv, incremental_populate_database_from_csv
+from stock_analyzer import StockAnalyzer
+from auto_update import auto_update_all_tickers, update_missing_technical_indicators  # и функция update_missing_market_data уже импортирована внутри auto_update
+from visualization import plot_daily_analysis, plot_stock_analysis, plot_interactive_chart
+import os
+from auto_update import normalize_ticker, update_missing_market_data
+
+# Настройка страницы
+st.set_page_config(page_title="Анализ акций", layout="wide")
+st.title("Анализ и отбор акций для покупки/продажи")
+
+def main():
+    # Путь к данным и API-ключ
+    data_folder = "C:/projek/FilesBd"  # Укажите актуальный путь
+    api_key = st.secrets["TINKOFF_API_KEY"]
+
+    # Инициализация StockAnalyzer
+    analyzer = StockAnalyzer(api_key, data_folder)
+
+    # Устанавливаем соединение и создаём таблицы, если их нет
+    conn = get_connection()
+    create_tables(conn)
+
+    # Боковая панель навигации
+    st.sidebar.header("Навигация")
+    navigation = st.sidebar.radio("Перейти к", ["Главная", "Обновление данных", "Графики"])
+    if navigation == "Главная":
+        st.header("Добро пожаловать!")
+        st.write("Используйте боковую панель для выбора раздела.")
+
+    elif navigation == "Обновление данных":
+        st.header("Обновление данных")
+        update_mode = st.sidebar.selectbox("Выберите режим обновления:", ["Загрузить CSV", "API price", "API indicators"])
+        
+        if update_mode == "Загрузить CSV":
+            csv_upload_mode = st.sidebar.selectbox("Выберите тип загрузки CSV:", ["Массовая загрузка (Bulk)", "Инкрементальная загрузка"])
+            if "csv_data" not in st.session_state:
+                st.session_state.csv_data = None
+            uploaded_file = st.file_uploader("Выберите CSV файл", type="csv")
+            if uploaded_file is not None:
+                st.session_state.csv_data = uploaded_file
+
+            if st.session_state.csv_data is not None:
+                try:
+                    st.session_state.csv_data.seek(0)
+                    df = pd.read_csv(st.session_state.csv_data, encoding="utf-8-sig")
+                    df.columns = df.columns.str.strip()
+                    st.write("Найденные столбцы:", df.columns.tolist())
+                    if "Contract Code" not in df.columns:
+                        st.error("Столбец 'Contract Code' не найден. Найденные столбцы: " + ", ".join(df.columns))
+                    else:
+                        st.write("Предварительный просмотр CSV (первые 5 строк):", df.head())
+                        st.write("Размер DataFrame:", df.shape)
+                        st.session_state.csv_data.seek(0)
+                        if csv_upload_mode == "Массовая загрузка (Bulk)":
+                            bulk_populate_database_from_csv(st.session_state.csv_data, conn)
+                            st.success("Массовая загрузка выполнена успешно! CSV можно удалить после проверки.")
+                        else:
+                            incremental_populate_database_from_csv(st.session_state.csv_data, conn)
+                            st.success("Инкрементальная загрузка выполнена успешно!")
+                except Exception as e:
+                    st.error(f"Ошибка при загрузке CSV: {e}")
+            else:
+                st.info("Ожидается загрузка CSV файла.")
+        elif update_mode == "API price":
+            st.write("Автоматическое обновление через Tinkoff API для тикеров, присутствующих в базе.")
+            # Дополнительный выбор: полное автообновление или обновление только недостающих рыночных данных
+            api_update_mode = st.sidebar.selectbox("Выберите тип обновления через API:", 
+                                                    ["Полное обновление", "Обновить только недостающие рыночные данные"])
+            if st.button("Запустить обновление через API"):
+                with st.spinner("Обновление данных через API..."):
+                    if api_update_mode == "Полное обновление":
+                        log_messages = auto_update_all_tickers(analyzer, conn)
+                    else:
+                        # Для обновления только недостающих рыночных данных:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT DISTINCT contract_code FROM companies")
+                        tickers = [row[0] for row in cursor.fetchall()]
+                        log_messages = []
+                        # Получаем FIGI mapping один раз, чтобы не вызывать его в каждом цикле
+                        figi_mapping = analyzer.get_figi_mapping()
+                        for ticker in tickers:
+                            st.write(f"Проверяем {ticker} на недостающие рыночные данные...")
+                            # Нормализуем тикер (например, 'AFLT-3.25' → 'AFLT')
+                            norm_ticker = normalize_ticker(ticker)
+                            if norm_ticker not in figi_mapping:
+                                log_messages.append(f"FIGI для {ticker} не найден.")
+                                continue
+                            figi = figi_mapping[norm_ticker]
+                            stock_data = analyzer.get_stock_data(figi)
+                            if stock_data is None or stock_data.empty:
+                                log_messages.append(f"Нет рыночных данных для {ticker}.")
+                                continue
+                            update_log = update_missing_market_data(analyzer, conn, ticker, stock_data)
+                            log_messages.extend(update_log)
+                    for msg in log_messages:
+                        st.write(msg)
+                st.success("Обновление через API завершено!")
+        elif update_mode == "API indicators":   
+            st.write("Автоматическое обновление через Tinkoff API для тикеров, присутствующих в базе.")   
+            if st.button("Обновить технические индикаторы"):
+                with st.spinner("Обновление индикаторов..."):
+                    log_messages = []
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT contract_code FROM companies")
+                    tickers = [row[0] for row in cursor.fetchall()]
+                    
+                    for ticker in tickers:
+                        messages = update_missing_technical_indicators(analyzer, conn, ticker, st.secrets["TINKOFF_API_KEY"])
+                        log_messages.extend(messages)
+
+                    for msg in log_messages:
+                        st.write(msg)
+            st.success("Обновление завершено!")
+  
+    elif navigation == "Графики":
+        st.header("Графики")
+        data = load_metrics_from_db(conn)
+        data_daily_data = load_daily_data_from_db(conn)
+        print(data)
+        if data.empty:
+            st.error("Нет данных для анализа. Сначала обновите данные.")
+        else:
+            view_option = st.sidebar.selectbox("Выберите тип графика:", ["График по дате", "График по тикеру", "Интерактивный график"])
+            if view_option == "График по дате":
+                unique_dates = sorted(data["date"].unique(), reverse=True)
+                selected_date = st.sidebar.selectbox("Выберите дату", unique_dates)
+                st.subheader("График по дате")
+                df = pd.DataFrame(data)# Замените на вашу дату
+                # Фильтрация данных по выбранной дате
+                filtered_df = df[df['date'] == selected_date]
+                filtered_df_1 = filtered_df[df["metric_type"] == "Изменение"]
+                filtered_df_2 = filtered_df[df["metric_type"] == "Открытые позиции"]
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.dataframe(filtered_df_1)
+
+                with col2:
+                    st.dataframe(filtered_df_2)
+                fig = plot_daily_analysis(data, selected_date)
+                st.pyplot(fig)
+            elif view_option == "График по тикеру":
+                tickers = data["contract_code"].unique()
+                selected_ticker = st.sidebar.selectbox("Выберите тикер", tickers)
+                filtered_df = data[data['contract_code'] == selected_ticker]
+                filtered_df_1 = filtered_df[filtered_df["metric_type"] == "Изменение"]
+                filtered_df_2 = filtered_df[filtered_df["metric_type"] == "Открытые позиции"]
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.dataframe(filtered_df_1)
+
+                with col2:
+                    st.dataframe(filtered_df_2)
+                st.subheader("График по тикеру")
+                fig = plot_stock_analysis(data, selected_ticker)
+                st.pyplot(fig)
+            elif view_option == "Интерактивный график":
+                st.dataframe(data_daily_data)
+                tickers = data["contract_code"].unique()
+                selected_ticker = st.sidebar.selectbox("Выберите тикер для интерактивного графика", tickers)
+                st.subheader("Интерактивный график")
+                fig = plot_interactive_chart(data, selected_ticker)
+                st.plotly_chart(fig)
+    conn.close()
+
+if __name__ == "__main__":
+    main()
