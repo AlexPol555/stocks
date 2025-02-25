@@ -1,7 +1,7 @@
 # app.py
 import streamlit as st
 import pandas as pd
-from database import get_connection, create_tables, load_data_from_db, load_daily_data_from_db
+from database import get_connection, create_tables, load_data_from_db, load_daily_data_from_db, mergeMetrDaily
 from populate_database import bulk_populate_database_from_csv, incremental_populate_database_from_csv
 from stock_analyzer import StockAnalyzer
 from auto_update import auto_update_all_tickers, \
@@ -9,6 +9,7 @@ from auto_update import auto_update_all_tickers, \
 from visualization import plot_daily_analysis, plot_stock_analysis, plot_interactive_chart
 import os
 from auto_update import normalize_ticker, update_missing_market_data
+from indicators import calculate_technical_indicators
 
 # Настройка страницы
 st.set_page_config(page_title="Анализ акций", layout="wide")
@@ -32,7 +33,12 @@ def main():
     if navigation == "Главная":
         st.header("Добро пожаловать!")
         st.write("Используйте боковую панель для выбора раздела.")
-
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT contract_code FROM companies")
+        tickers = [row[0] for row in cursor.fetchall()]
+        mergeData = mergeMetrDaily(conn)
+        df_all = mergeData.groupby('contract_code', group_keys=False).apply(calculate_technical_indicators)
+        st.write(df_all)
     elif navigation == "Обновление данных":
         st.header("Обновление данных")
         update_mode = st.sidebar.selectbox("Выберите режим обновления:",

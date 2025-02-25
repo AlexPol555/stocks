@@ -96,7 +96,6 @@ def load_daily_data_from_db(conn, start_date=None, end_date=None) -> pd.DataFram
     if end_date:
         query += f" AND dd.date <= '{end_date}'"
     df = pd.read_sql(query, conn)
-    print(df)
     return df
 
 def update_technical_indicators(conn, daily_data_id, indicators):
@@ -119,3 +118,79 @@ def update_technical_indicators(conn, daily_data_id, indicators):
               indicators['bb_upper'], indicators['bb_middle'], indicators['bb_lower']))
     conn.commit()
 
+
+def mergeMetrDaily(conn) -> pd.DataFrame:
+    cursor = conn.cursor()
+    query = """
+    SELECT 
+        c.contract_code, 
+        dd.date,
+        dd.open,
+        dd.low,
+        dd.high,
+        dd.close,
+        dd.volume,
+        
+        -- Данные для "Открытые позиции"
+        op.value1 AS long_fiz_1,
+        op.value2 AS short_fiz_2,
+        op.value3 AS long_jur_3,
+        op.value4 AS short_jur_4,
+        op.value5 AS total_positions,
+        
+        -- Данные для "Количество лиц"
+        kl.value1 AS count_fiz_1,
+        kl.value2 AS count_fiz_2,
+        kl.value3 AS count_jur_3,
+        kl.value4 AS count_jur_4,
+        kl.value5 AS total_count
+        
+    FROM daily_data AS dd
+    JOIN companies AS c 
+        ON dd.company_id = c.id
+        
+    -- Подзапрос для "Открытые позиции"
+    LEFT JOIN (
+        SELECT 
+            company_id, 
+            date,
+            value1,
+            value2,
+            value3,
+            value4,
+            value5
+        FROM metrics
+        WHERE metric_type = 'Открытые позиции'
+    ) AS op 
+        ON dd.company_id = op.company_id 
+        AND dd.date = op.date
+        
+    -- Подзапрос для "Количество лиц"
+    LEFT JOIN (
+        SELECT 
+            company_id, 
+            date,
+            value1,
+            value2,
+            value3,
+            value4,
+            value5
+        FROM metrics
+        WHERE metric_type = 'Количество лиц'
+    ) AS kl 
+        ON dd.company_id = kl.company_id 
+        AND dd.date = kl.date
+        
+    ORDER BY dd.date;
+    """
+
+    # Выполнение запроса
+    cursor.execute(query)
+
+    # Извлечение результатов
+    columns = [col[0] for col in cursor.description]
+    data = cursor.fetchall()
+    # Преобразование в DataFrame
+    df = pd.DataFrame(data, columns=columns)
+
+    return df
