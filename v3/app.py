@@ -37,8 +37,14 @@ def main():
         cursor.execute("SELECT DISTINCT contract_code FROM companies")
         tickers = [row[0] for row in cursor.fetchall()]
         mergeData = mergeMetrDaily(conn)
-        df_all = mergeData.groupby('contract_code', group_keys=False).apply(calculate_technical_indicators)
-        st.write(df_all)
+        results = []
+        for contract, group in mergeData.groupby('contract_code'):
+            group = group.copy()  # на всякий случай
+            results.append(calculate_technical_indicators(group))
+        df_all = pd.concat(results)
+        unique_dates = sorted(df_all["date"].unique(), reverse=True)
+        selected_date = st.sidebar.selectbox("Выберите дату", unique_dates)
+        st.write(df_all[df_all['date'] == selected_date])
     elif navigation == "Обновление данных":
         st.header("Обновление данных")
         update_mode = st.sidebar.selectbox("Выберите режим обновления:",
@@ -131,7 +137,6 @@ def main():
         st.header("Графики")
         data = load_data_from_db(conn)
         data_daily_data = load_daily_data_from_db(conn)
-        print(data)
         if data.empty:
             st.error("Нет данных для анализа. Сначала обновите данные.")
         else:

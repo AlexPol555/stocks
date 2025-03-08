@@ -60,7 +60,6 @@ class StockAnalyzer:
                     "low": quotation_to_decimal(candle.low),
                     "volume": candle.volume
                 } for candle in candles])
-                print(data)
                 return data
 
 

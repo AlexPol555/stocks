@@ -75,75 +75,7 @@ def update_missing_market_data(analyzer, conn, ticker, stock_data):
         """, (open_val, low_val, high_val, close_val, volume_val, daily_data_id))
         conn.commit()
         log.append(f"Обновлены рыночные данные для {ticker} на {daily_date}.")
-
-        # cursor.execute("SELECT id FROM technical_indicators WHERE daily_data_id = ?", (daily_data_id,))
-        # tech_record = cursor.fetchone()
-        # if tech_record is None:
-        #     try:
-        #         indicators = analyzer.calculate_technical_indicators(matching_rows['close'])
-        #     except Exception as calc_e:
-        #         log.append(f"Ошибка расчёта технических индикаторов для {ticker} на {daily_date}: {calc_e}")
-        #         continue
-        #     sma_val = indicators["sma"].iloc[-1] if not indicators["sma"].empty else None
-        #     ema_val = indicators["ema"].iloc[-1] if not indicators["ema"].empty else None
-        #     rsi_val = indicators["rsi"].iloc[-1] if not indicators["rsi"].empty else None
-        #     macd_val = indicators["macd"].iloc[-1] if not indicators["macd"].empty else None
-        #     macd_signal_val = indicators["macd_signal"].iloc[-1] if not indicators["macd_signal"].empty else None
-        #     bb_upper_val = indicators["bb_upper"].iloc[-1] if not indicators["bb_upper"].empty else None
-        #     bb_middle_val = indicators["bb_middle"].iloc[-1] if not indicators["bb_middle"].empty else None
-        #     bb_lower_val = indicators["bb_lower"].iloc[-1] if not indicators["bb_lower"].empty else None
-        #     cursor.execute("""
-        #         INSERT INTO technical_indicators 
-        #         (daily_data_id, sma, ema, rsi, macd, macd_signal, bb_upper, bb_middle, bb_lower)
-        #         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        #     """, (daily_data_id, sma_val, ema_val, rsi_val, macd_val, macd_signal_val, bb_upper_val, bb_middle_val, bb_lower_val))
-        #     conn.commit()
-        #     log.append(f"Вставлены технические индикаторы для {ticker} на {daily_date}.")
-        # else:
-        #     log.append(f"Технические индикаторы для {ticker} на {daily_date} уже заполнены.")
     return log
-# def auto_update_all_tickers(analyzer, conn):
-#     """
-#     Автоматически обновляет базу данных через API для тикеров, присутствующих в базе.
-#     Для каждого тикера производится нормализация, затем вызывается функция update_missing_market_data.
-#     """
-
-#     cursor = conn.cursor()
-#     # Извлекаем тикеры из таблицы companies
-#     cursor.execute("SELECT contract_code FROM companies")
-#     existing_tickers = [row[0] for row in cursor.fetchall()]
-#     additional_mapping = {
-#     'SBER': 'BBG004730N88',
-#     'SBERF': 'FUTSBERF0000',
-#     'GAZP': 'BBG004730RP0',
-#     'ABIO': 'TCS10A0JNAB6',
-#     'TRNFP': 'BBG00475KHX6',
-#     'BELU': 'BBG000TY1CD1',
-#     'T': 'BBG000BSJK37',
-#     'SNGS': 'BBG0047315D0',
-#     'SNGSP': 'BBG004S681M2',
-#     'NVTK': 'BBG00475KKY8',
-#     'MTSS': 'BBG004S681W1',
-#     'TATN': 'BBG004RVFFC0',
-#     'TATNP': 'BBG004S68829',
-#     }
-#     figi_mapping = analyzer.get_figi_mapping()
-#     filtered_mapping = {ticker: figi for ticker, figi in figi_mapping.items() if ticker in existing_tickers}
-#     filtered_mapping.update(additional_mapping)
-#     log_messages = []
-#     count = 0
-#     for norm_ticker, figi in filtered_mapping.items():
-#         count += 1
-#         st.write(f"[{count}/{len(filtered_mapping)}] Обновляем данные для {norm_ticker}...")
-#         log_messages.append(f"Обновление для {norm_ticker} начато.")
-#         stock_data = analyzer.get_stock_data(figi)
-#         if stock_data is not None and not stock_data.empty:
-#             update_log = update_missing_market_data(analyzer, conn, norm_ticker, stock_data)
-#             log_messages.extend(update_log)
-#         else:
-#             log_messages.append(f"Нет данных для {norm_ticker}.")
-#     return log_messages
-
 
 def auto_update_all_tickers(analyzer, conn, full_update=True):
     """
@@ -165,22 +97,6 @@ def auto_update_all_tickers(analyzer, conn, full_update=True):
         log_messages.append("Полное обновление: таблица daily_data очищена.")
 
     figi_mapping = analyzer.get_figi_mapping()
-    # additional_mapping = {
-    #     'SBER': 'BBG004730N88',
-    #     'SBERF': 'FUTSBERF0000',
-    #     'GAZP': 'BBG004730RP0',
-    #     'ABIO': 'TCS10A0JNAB6',
-    #     'TRNFP': 'BBG00475KHX6',
-    #     'BELU': 'BBG000TY1CD1',
-    #     'T': 'BBG000BSJK37',
-    #     'SNGS': 'BBG0047315D0',
-    #     'SNGSP': 'BBG004S681M2',
-    #     'NVTK': 'BBG00475KKY8',
-    #     'MTSS': 'BBG004S681W1',
-    #     'TATN': 'BBG004RVFFC0',
-    #     'TATNP': 'BBG004S68829',
-    # }
-    # figi_mapping.update(additional_mapping)
 
     for ticker in tickers:
         if ticker not in figi_mapping:
