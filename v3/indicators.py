@@ -1,24 +1,38 @@
 # indicators.py
 
 import numpy as np
+import pandas as pd
+import streamlit as st
+from database import mergeMetrDaily
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import GridSearchCV, train_test_split
 
+@st.cache_data
+def get_calculated_data(_conn):
+    mergeData = mergeMetrDaily(_conn)
+    results = []
+    for contract, group in mergeData.groupby('contract_code'):
+        group = group.copy()  # на всякий случай
+        results.append(calculate_technical_indicators(group))
+    df_all = pd.concat(results)
+    return df_all
+
 def calculate_technical_indicators(data):
+       # Параметры
     window = 60
     multiplier = 0.5
     epsilon = 1e-9
 
-    # Сортировка данных по дате и создание копии
+    # Сортируем данные по дате и создаём копию
     data = data.sort_values('date').copy()
 
     # --- Основные индикаторы ---
-    # SMA
+    # SMA и EMA
     data['SMA_50'] = data['close'].rolling(window=50).mean()
     data['SMA_200'] = data['close'].rolling(window=200).mean()
-    # EMA
     data['EMA_50'] = data['close'].ewm(span=50, adjust=False).mean()
     data['EMA_200'] = data['close'].ewm(span=200, adjust=False).mean()
+
     # RSI с защитой от деления на ноль
     delta = data['close'].diff()
     gain = delta.clip(lower=0)
@@ -27,7 +41,8 @@ def calculate_technical_indicators(data):
     avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
     RS = avg_gain / (avg_loss + epsilon)
     data['RSI'] = 100 - (100 / (1 + RS))
-    # MACD
+
+    # MACD и сигнальная линия
     data['12_ema'] = data['close'].ewm(span=12, adjust=False).mean()
     data['26_ema'] = data['close'].ewm(span=26, adjust=False).mean()
     data['MACD'] = data['12_ema'] - data['26_ema']
@@ -46,12 +61,13 @@ def calculate_technical_indicators(data):
         (data['RSI'] > 65) &
         (data['MACD'] < data['Signal_Line'])
     ).astype(int)
+
     # Комбинированный сигнал: 1 – покупка, -1 – продажа, 0 – отсутствие сигнала
     data['Signal'] = 0
     data.loc[data['Buy_Signal'] == 1, 'Signal'] = 1
     data.loc[data['Sell_Signal'] == 1, 'Signal'] = -1
 
-    # --- Обучение модели на основе выбранных признаков ---
+    # --- Обучение модели для оценки качества сигналов ---
     features = ['SMA_50', 'SMA_200', 'EMA_50', 'EMA_200', 'RSI', 'MACD', 'Signal_Line']
     X = data[features]
     y = data['Signal']
@@ -59,14 +75,17 @@ def calculate_technical_indicators(data):
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
     accuracy = model.score(X_test, y_test)
+    print("Точность модели:", accuracy)
 
     # --- Адаптивное вычисление порогов для RSI ---
     adaptive_buy_rsi = data.loc[data['Signal'] == 1, 'RSI']
     adaptive_sell_rsi = data.loc[data['Signal'] == -1, 'RSI']
     adaptive_buy_threshold = adaptive_buy_rsi.mean() - adaptive_buy_rsi.std()
     adaptive_sell_threshold = adaptive_sell_rsi.mean() + adaptive_sell_rsi.std()
+    print("Адаптивный порог для покупки (RSI):", adaptive_buy_threshold)
+    print("Адаптивный порог для продажи (RSI):", adaptive_sell_threshold)
 
-    use_adaptive = True  # Переключатель: True – используем адаптивные пороги
+    use_adaptive = True  # Если True – используем адаптивные пороги
     if use_adaptive:
         rsi_buy_threshold = adaptive_buy_threshold
         rsi_sell_threshold = adaptive_sell_threshold
@@ -116,34 +135,47 @@ def calculate_technical_indicators(data):
     data['TR'] = data[['High_Low', 'High_PrevClose', 'Low_PrevClose']].max(axis=1)
     window_atr = 14
     data['ATR'] = data['TR'].rolling(window=window_atr).mean()
+    data.drop(columns=['BB_Std', 'Lowest_Low', 'Highest_High', 'Prev_Close', 
+                       'High_Low', 'High_PrevClose', 'Low_PrevClose', 'TR'], inplace=True)
 
-    # --- Новые адаптивные сигналы по дополнительным индикаторам ---
-    # Условие для покупки:
-    # - Цена ниже нижней границы Bollinger Bands
-    # - Stochastic %K ниже 20 (сигнал перепроданности)
-    # - ATR ниже своего 14-периодного скользящего среднего (низкая волатильность)
     data['New_Adaptive_Buy_Signal'] = (
         (data['close'] < data['BB_Lower']) &
         (data['%K'] < 20) &
         (data['ATR'] < data['ATR'].rolling(window=14).mean())
     ).astype(int)
-
-    # Условие для продажи:
-    # - Цена выше верхней границы Bollinger Bands
-    # - Stochastic %K выше 80 (сигнал перекупленности)
-    # - ATR ниже своего 14-периодного скользящего среднего
     data['New_Adaptive_Sell_Signal'] = (
         (data['close'] > data['BB_Upper']) &
         (data['%K'] > 80) &
         (data['ATR'] < data['ATR'].rolling(window=14).mean())
     ).astype(int)
 
-    # Удаление временных колонок для экономии памяти
-    data.drop(columns=['BB_Std', 'Lowest_Low', 'Highest_High', 'Prev_Close', 
-                       'High_Low', 'High_PrevClose', 'Low_PrevClose', 'TR'], inplace=True)
+    # --- Расчёт прибыльности сигналов за следующие 3 дня ---
+    # Рассчитываем максимум high и минимум low для следующих 3 дней (без текущего дня) с помощью list comprehension
+    max_high_next_3 = [data['high'].iloc[i+1:i+4].max() for i in range(len(data))]
+    min_low_next_3  = [data['low'].iloc[i+1:i+4].min() for i in range(len(data))]
+    data['max_high_next_3'] = max_high_next_3
+    data['min_low_next_3'] = min_low_next_3
+
+    # Расчёт прибыли для Buy-сигналов (Adaptive и New Adaptive) – используем максимум high
+    profit_buy = (np.array(max_high_next_3) - data['close']) / data['close'] * 100
+    data['Profit_Adaptive_Buy'] = profit_buy * data['Adaptive_Buy_Signal']
+    data['Profit_New_Adaptive_Buy'] = profit_buy * data['New_Adaptive_Buy_Signal']
+
+    # Расчёт прибыли для Sell-сигналов:
+    # Если за следующие 3 дня цена опустилась ниже цены входа, рассчитываем прибыль как:
+    #    (entry - min_low) / entry * 100,
+    # иначе – считаем максимальный убыток как:
+    #    (entry - max_high) / entry * 100.
+    profit_sell = np.where(
+         np.array(min_low_next_3) < data['close'],
+         (data['close'] - np.array(min_low_next_3)) / data['close'] * 100,
+         (data['close'] - np.array(max_high_next_3)) / data['close'] * 100
+    )
+    data['Profit_Adaptive_Sell'] = profit_sell * data['Adaptive_Sell_Signal']
+    data['Profit_New_Adaptive_Sell'] = profit_sell * data['New_Adaptive_Sell_Signal']
 
     return data
-# [['contract_code', 'date', 'SMA_50','EMA_50', 'RSI','MACD', 'Signal', 'Adaptive_Buy_Signal','Adaptive_Sell_Signal']]
+# [['contract_code', 'date', 'Adaptive_Buy_Signal','Adaptive_Sell_Signal', 'New_Adaptive_Buy_Signal', 'New_Adaptive_Sell_Signal']]
 
 
 def calculate_target_price(merged_data, signal_type='Buy', window=10, multiplier=0.5):

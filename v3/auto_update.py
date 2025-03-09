@@ -97,7 +97,7 @@ def auto_update_all_tickers(analyzer, conn, full_update=True):
         log_messages.append("Полное обновление: таблица daily_data очищена.")
 
     figi_mapping = analyzer.get_figi_mapping()
-
+    print(figi_mapping)
     for ticker in tickers:
         if ticker not in figi_mapping:
             log_messages.append(f"FIGI для {ticker} не найден.")

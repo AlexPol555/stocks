@@ -9,7 +9,7 @@ from auto_update import auto_update_all_tickers, \
 from visualization import plot_daily_analysis, plot_stock_analysis, plot_interactive_chart
 import os
 from auto_update import normalize_ticker, update_missing_market_data
-from indicators import calculate_technical_indicators
+from indicators import get_calculated_data
 
 # Настройка страницы
 st.set_page_config(page_title="Анализ акций", layout="wide")
@@ -28,6 +28,7 @@ def main():
     create_tables(conn)
 
     # Боковая панель навигации
+
     st.sidebar.header("Навигация")
     navigation = st.sidebar.radio("Перейти к", ["Главная", "Обновление данных", "Графики"])
     if navigation == "Главная":
@@ -36,15 +37,110 @@ def main():
         cursor = conn.cursor()
         cursor.execute("SELECT DISTINCT contract_code FROM companies")
         tickers = [row[0] for row in cursor.fetchall()]
-        mergeData = mergeMetrDaily(conn)
-        results = []
-        for contract, group in mergeData.groupby('contract_code'):
-            group = group.copy()  # на всякий случай
-            results.append(calculate_technical_indicators(group))
-        df_all = pd.concat(results)
+
+        df_all = get_calculated_data(conn)
+
         unique_dates = sorted(df_all["date"].unique(), reverse=True)
-        selected_date = st.sidebar.selectbox("Выберите дату", unique_dates)
-        st.write(df_all[df_all['date'] == selected_date])
+        tickers = df_all["contract_code"].unique()
+
+        # Выбор типа фильтрации через радиокнопки
+        filter_type = st.sidebar.radio("Фильтровать данные по:", ("По дате", "По тикеру", "Без фильтрации"))
+
+        if filter_type == "По дате":
+            selected_date = st.sidebar.selectbox("Выберите дату", unique_dates)
+            filtered_df = df_all[df_all["date"] == selected_date]
+        elif filter_type == "По тикеру":
+            selected_ticker = st.sidebar.selectbox("Выберите тикер", tickers)
+            filtered_df = df_all[df_all['contract_code'] == selected_ticker]
+        else:
+            filtered_df = df_all
+
+        signals_filter = (
+            (df_all['Adaptive_Buy_Signal'] == 1) |
+            (df_all['Adaptive_Sell_Signal'] == 1) |
+            (df_all['New_Adaptive_Buy_Signal'] == 1) |
+            (df_all['New_Adaptive_Sell_Signal'] == 1)
+        )
+        cols_to_show = [
+            'contract_code', 'date', 'Adaptive_Buy_Signal', 'Adaptive_Sell_Signal', 
+            'New_Adaptive_Buy_Signal', 'New_Adaptive_Sell_Signal', 
+            'Profit_Adaptive_Buy', 'Profit_Adaptive_Sell', 
+            'Profit_New_Adaptive_Buy', 'Profit_New_Adaptive_Sell'
+        ]
+        filtered_df = filtered_df.loc[signals_filter, cols_to_show]
+
+        if filtered_df.duplicated().any():
+            filtered_df = filtered_df.drop_duplicates()
+
+        st.write(filtered_df)
+
+        # Фильтруем строки, где сработал хотя бы один из сигналов
+
+
+        df_signals = df_all[signals_filter]
+
+        # Группируем по тикеру и агрегируем необходимые показатели:
+
+        summary = df_signals.groupby('contract_code').agg(
+            New_Adaptive_Buy_Signal=('New_Adaptive_Buy_Signal', 'sum'),
+            New_Adaptive_Sell_Signal=('New_Adaptive_Sell_Signal', 'sum'),
+            Adaptive_Buy_Signal=('Adaptive_Buy_Signal', 'sum'),
+            Adaptive_Sell_Signal=('Adaptive_Sell_Signal', 'sum'),
+            Profit_Adaptive_Buy=('Profit_Adaptive_Buy', 'sum'),
+            Profit_Adaptive_Sell=('Profit_Adaptive_Sell', 'sum'),
+            Profit_New_Adaptive_Buy=('Profit_New_Adaptive_Buy', 'sum'),
+            Profit_New_Adaptive_Sell=('Profit_New_Adaptive_Sell', 'sum')
+        ).reset_index()
+
+        st.write(summary)
+        # Фильтруем строки с сработавшими сигналами
+        signals_filter = (
+            (df_all['Adaptive_Buy_Signal'] == 1) |
+            (df_all['Adaptive_Sell_Signal'] == 1) |
+            (df_all['New_Adaptive_Buy_Signal'] == 1) |
+            (df_all['New_Adaptive_Sell_Signal'] == 1) 
+        )
+        df_signals = df_all[signals_filter].copy()
+
+        # Преобразуем столбец 'date' в datetime, если это не так
+        df_signals['date'] = pd.to_datetime(df_signals['date'])
+
+        # Добавляем столбцы для месяца и недели на основе столбца 'date'
+        df_signals['month'] = df_signals['date'].dt.to_period('M')
+        df_signals['week'] = df_signals['date'].dt.to_period('W')
+
+        # Группировка по месяцам
+        summary_by_month = df_signals.groupby('month').agg(
+            Adaptive_Buy_Signal=('Adaptive_Buy_Signal', 'sum'),
+            Adaptive_Sell_Signal=('Adaptive_Sell_Signal', 'sum'),
+            New_Adaptive_Buy_Signal=('New_Adaptive_Buy_Signal', 'sum'),
+            New_Adaptive_Sell_Signal=('New_Adaptive_Sell_Signal', 'sum'),
+            Profit_Adaptive_Buy=('Profit_Adaptive_Buy', 'sum'),
+            Profit_Adaptive_Sell=('Profit_Adaptive_Sell', 'sum'),
+            Profit_New_Adaptive_Buy=('Profit_New_Adaptive_Buy', 'sum'),
+            Profit_New_Adaptive_Sell=('Profit_New_Adaptive_Sell', 'sum')
+        ).reset_index()
+
+        # Группировка по неделям
+        summary_by_week = df_signals.groupby('week').agg(
+            Adaptive_Buy_Signal=('Adaptive_Buy_Signal', 'sum'),
+            Adaptive_Sell_Signal=('Adaptive_Sell_Signal', 'sum'),
+            New_Adaptive_Buy_Signal=('New_Adaptive_Buy_Signal', 'sum'),
+            New_Adaptive_Sell_Signal=('New_Adaptive_Sell_Signal', 'sum'),
+            Profit_Adaptive_Buy=('Profit_Adaptive_Buy', 'sum'),
+            Profit_Adaptive_Sell=('Profit_Adaptive_Sell', 'sum'),
+            Profit_New_Adaptive_Buy=('Profit_New_Adaptive_Buy', 'sum'),
+            Profit_New_Adaptive_Sell=('Profit_New_Adaptive_Sell', 'sum')
+        ).reset_index()
+
+        st.write("Агрегированные данные по месяцам:")
+        st.write(summary_by_month)
+
+        st.write("Агрегированные данные по неделям:")
+        st.write(summary_by_week)
+
+        
+        
     elif navigation == "Обновление данных":
         st.header("Обновление данных")
         update_mode = st.sidebar.selectbox("Выберите режим обновления:",
