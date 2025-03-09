@@ -10,6 +10,8 @@ from visualization import plot_daily_analysis, plot_stock_analysis, plot_interac
 import os
 from auto_update import normalize_ticker, update_missing_market_data
 from indicators import get_calculated_data
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
+
 
 # Настройка страницы
 st.set_page_config(page_title="Анализ акций", layout="wide")
@@ -67,12 +69,92 @@ def main():
             'Profit_Adaptive_Buy', 'Profit_Adaptive_Sell', 
             'Profit_New_Adaptive_Buy', 'Profit_New_Adaptive_Sell'
         ]
-        filtered_df = filtered_df.loc[signals_filter, cols_to_show]
+        filtered_df = filtered_df.loc[signals_filter]
 
         if filtered_df.duplicated().any():
             filtered_df = filtered_df.drop_duplicates()
 
-        st.write(filtered_df)
+        # Настройка AgGrid для отображения таблицы с выбором одной строки
+        gb = GridOptionsBuilder.from_dataframe(filtered_df)
+        gb.configure_selection(selection_mode="single", use_checkbox=False)
+        gridOptions = gb.build()
+
+        grid_response = AgGrid(
+            filtered_df,
+            gridOptions=gridOptions,
+            data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
+            update_mode=GridUpdateMode.SELECTION_CHANGED,
+            theme="alpine"
+        )
+
+        # Получаем выбранные строки
+        selected_rows = grid_response.get("selected_rows")
+
+        # Обработка выбранной строки с проверкой на пустоту
+        selected = None
+        if selected_rows is not None:
+            if isinstance(selected_rows, pd.DataFrame):
+                if not selected_rows.empty:
+                    selected = selected_rows.iloc[0]
+            elif isinstance(selected_rows, list):
+                if len(selected_rows) > 0:
+                    selected = selected_rows[0]
+
+        if selected is not None:
+            # Разбиваем экран на две колонки: левая для информации, правая для ввода заявки
+            left_col, right_col = st.columns(2)
+            
+            with left_col:
+                st.markdown("## Информация о заявке")
+                st.write(f"**Тикер:** {selected.get('contract_code')}")
+                st.write(f"**Дата:** {selected.get('date')}")
+                st.write(f"**Цена закрытия:** {selected.get('close')}")
+                
+                # Дополнительные данные по ценам и показателям
+                st.write(f"**Long Fiz 1:** {selected.get('long_fiz_1', 'N/A')}")
+                st.write(f"**Short Fiz 2:** {selected.get('short_fiz_2', 'N/A')}")
+                st.write(f"**Long Jur 3:** {selected.get('long_jur_3', 'N/A')}")
+                st.write(f"**Short Jur 4:** {selected.get('short_jur_4', 'N/A')}")
+                st.write(f"**RSI:** {selected.get('RSI', 'N/A')}")
+                
+                # Если заданы значения для long_fiz_1 и short_fiz_2, рассчитываем их соотношение
+                long_fiz_1 = selected.get('long_fiz_1')
+                short_fiz_2 = selected.get('short_fiz_2')
+                long_jur_3 = selected.get('long_jur_3')
+                short_jur_4 = selected.get('short_jur_4')
+
+                if long_fiz_1 is not None and short_fiz_2 not in (None, 0):
+                    st.write(f"**Соотношение (Long Fiz 1 / short_jur_4):** {long_fiz_1 / short_jur_4:.2f}")
+                    st.write(f"**Соотношение (short_fiz_2 / long_jur_3):** {short_fiz_2 / long_jur_3:.2f}")
+    
+            
+            with right_col:
+                st.markdown("## Параметры заявки")
+                volume = st.number_input("Объём заявки", min_value=1, value=100, step=1)
+                # По умолчанию цена заявки равна цене закрытия выбранной строки
+                order_price = st.number_input("Цена заявки", min_value=0.0, value=float(selected.get("close", 0)))
+                
+                st.markdown("### Выберите действие")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Купить"):
+                        st.success(
+                            f"Заявка на покупку отправлена:\n"
+                            f"Тикер: {selected.get('contract_code')}\n"
+                            f"Объём: {volume} шт.\n"
+                            f"Цена: {order_price}"
+                        )
+                with col2:
+                    if st.button("Продать"):
+                        st.success(
+                            f"Заявка на продажу отправлена:\n"
+                            f"Тикер: {selected.get('contract_code')}\n"
+                            f"Объём: {volume} шт.\n"
+                            f"Цена: {order_price}"
+                        )
+        else:
+            st.info("Пожалуйста, выберите заявку из таблицы.")
+
 
         # Фильтруем строки, где сработал хотя бы один из сигналов
 
