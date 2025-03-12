@@ -2,10 +2,10 @@
 import re
 import pandas as pd
 from database import update_technical_indicators
-from indicators import parse_technical_indicators
 from stock_analyzer import StockAnalyzer
 from datetime import datetime, timedelta, timezone
 import streamlit as st
+from indicators import get_calculated_data
 
 def normalize_ticker(ticker: str) -> str:
     """
@@ -83,6 +83,7 @@ def auto_update_all_tickers(analyzer, conn, full_update=True):
     - Если full_update=True: очищает таблицу daily_data и загружает новые данные.
     - Если full_update=False: обновляет только записи с NULL значениями.
     """
+    # get_calculated_data.clear()
     log_messages = []
     cursor = conn.cursor()
 
@@ -97,7 +98,7 @@ def auto_update_all_tickers(analyzer, conn, full_update=True):
         log_messages.append("Полное обновление: таблица daily_data очищена.")
 
     figi_mapping = analyzer.get_figi_mapping()
-    print(figi_mapping)
+    
     for ticker in tickers:
         if ticker not in figi_mapping:
             log_messages.append(f"FIGI для {ticker} не найден.")
@@ -156,41 +157,4 @@ def auto_update_all_tickers(analyzer, conn, full_update=True):
             log_messages.append(f"Обновлены недостающие данные для {ticker}.")
 
     conn.commit()
-    return log_messages
-
-def update_missing_technical_indicators(analyzer, conn, ticker, token):
-    """
-    Проверяет и обновляет недостающие технические индикаторы для указанного тикера.
-    """
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT dd.id, dd.date 
-        FROM daily_data dd 
-        LEFT JOIN technical_indicators ti ON dd.id = ti.daily_data_id
-        WHERE dd.company_id = (SELECT id FROM companies WHERE contract_code = ?) 
-        AND ti.id IS NULL
-    """, (ticker,))
-    
-    missing_dates = cursor.fetchall()
-    if not missing_dates:
-        return [f"Все индикаторы для {ticker} уже загружены."]
-
-    log_messages = []
-    figi_mapping = analyzer.get_figi_mapping()
-    if ticker not in figi_mapping:
-        return [f"FIGI для {ticker} не найден."]
-
-    figi = figi_mapping[ticker]
-
-    for daily_data_id, date_str in missing_dates:
-        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-        indicators_data = get_technical_indicators(figi, date_obj, date_obj, token)
-
-        parsed_indicators = parse_technical_indicators(indicators_data)
-        if parsed_indicators:
-            update_technical_indicators(conn, daily_data_id, parsed_indicators)
-            log_messages.append(f"Обновлены индикаторы для {ticker} на {date_str}.")
-        else:
-            log_messages.append(f"Нет данных индикаторов для {ticker} на {date_str}.")
-
     return log_messages

@@ -7,7 +7,6 @@ from database import mergeMetrDaily
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import GridSearchCV, train_test_split
 
-@st.cache_data
 def get_calculated_data(_conn):
     mergeData = mergeMetrDaily(_conn)
     results = []
@@ -75,15 +74,12 @@ def calculate_technical_indicators(data):
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
     accuracy = model.score(X_test, y_test)
-    print("Точность модели:", accuracy)
 
     # --- Адаптивное вычисление порогов для RSI ---
     adaptive_buy_rsi = data.loc[data['Signal'] == 1, 'RSI']
     adaptive_sell_rsi = data.loc[data['Signal'] == -1, 'RSI']
     adaptive_buy_threshold = adaptive_buy_rsi.mean() - adaptive_buy_rsi.std()
     adaptive_sell_threshold = adaptive_sell_rsi.mean() + adaptive_sell_rsi.std()
-    print("Адаптивный порог для покупки (RSI):", adaptive_buy_threshold)
-    print("Адаптивный порог для продажи (RSI):", adaptive_sell_threshold)
 
     use_adaptive = True  # Если True – используем адаптивные пороги
     if use_adaptive:
@@ -157,19 +153,20 @@ def calculate_technical_indicators(data):
     data['min_low_next_3'] = min_low_next_3
 
     # Расчёт прибыли для Buy-сигналов (Adaptive и New Adaptive) – используем максимум high
-    profit_buy = (np.array(max_high_next_3) - data['close']) / data['close'] * 100
+    profit_buy = np.where(
+        ((np.array(max_high_next_3) - data['close']) / data['close'] * 100) < 0.5,
+        (np.array(min_low_next_3) - data['close']) / data['close'] * 100,
+        (np.array(max_high_next_3) - data['close']) / data['close'] * 100
+    )
     data['Profit_Adaptive_Buy'] = profit_buy * data['Adaptive_Buy_Signal']
     data['Profit_New_Adaptive_Buy'] = profit_buy * data['New_Adaptive_Buy_Signal']
 
-    # Расчёт прибыли для Sell-сигналов:
-    # Если за следующие 3 дня цена опустилась ниже цены входа, рассчитываем прибыль как:
-    #    (entry - min_low) / entry * 100,
-    # иначе – считаем максимальный убыток как:
-    #    (entry - max_high) / entry * 100.
+    # Расчёт для Sell-сигналов:
+    # Если (close - min_low_next_3)/close*100 < 0.5, то берем (close - max_high_next_3)/close*100, иначе (close - min_low_next_3)/close*100
     profit_sell = np.where(
-         np.array(min_low_next_3) < data['close'],
-         (data['close'] - np.array(min_low_next_3)) / data['close'] * 100,
-         (data['close'] - np.array(max_high_next_3)) / data['close'] * 100
+        ((data['close'] - np.array(min_low_next_3)) / data['close'] * 100) < 0.5,
+        (data['close'] - np.array(max_high_next_3)) / data['close'] * 100,
+        (data['close'] - np.array(min_low_next_3)) / data['close'] * 100
     )
     data['Profit_Adaptive_Sell'] = profit_sell * data['Adaptive_Sell_Signal']
     data['Profit_New_Adaptive_Sell'] = profit_sell * data['New_Adaptive_Sell_Signal']
@@ -177,49 +174,3 @@ def calculate_technical_indicators(data):
     return data
 # [['contract_code', 'date', 'Adaptive_Buy_Signal','Adaptive_Sell_Signal', 'New_Adaptive_Buy_Signal', 'New_Adaptive_Sell_Signal']]
 
-
-def calculate_target_price(merged_data, signal_type='Buy', window=10, multiplier=0.5):
-    """
-    Функция вычисляет целевой уровень цены для сигнала покупки или продажи.
-    :param merged_data: DataFrame с данными, содержащий колонку 'close'
-    :param signal_type: 'Buy' для покупки, 'Sell' для продажи
-    :param window: период для расчета недавнего диапазона цен (например, 14 дней)
-    :param multiplier: множитель для диапазона (можно настроить)
-    :return: Series с целевыми уровнями цены
-    """
-    recent_high = merged_data['close'].rolling(window=window).max()
-    recent_low = merged_data['close'].rolling(window=window).min()
-    price_range = recent_high - recent_low
-
-    if signal_type == 'Buy':
-        target_price = merged_data['close'] + multiplier * price_range
-    elif signal_type == 'Sell':
-        target_price = merged_data['close'] - multiplier * price_range
-    else:
-        target_price = merged_data['close']
-    
-    return target_price
-
-def parse_technical_indicators(api_response):
-    """
-    Парсит ответ от API Tinkoff и возвращает данные в формате словаря.
-    """
-    try:
-        data = api_response.get("indicators", [])
-        if not data:
-            return None
-
-        indicators = {
-            "sma": data.get("sma", None),
-            "ema": data.get("ema", None),
-            "rsi": data.get("rsi", None),
-            "macd": data.get("macd", None),
-            "macd_signal": data.get("macd_signal", None),
-            "bb_upper": data.get("bb_upper", None),
-            "bb_middle": data.get("bb_middle", None),
-            "bb_lower": data.get("bb_lower", None),
-        }
-        return indicators
-    except Exception as e:
-        print(f"Ошибка парсинга индикаторов: {e}")
-        return None
