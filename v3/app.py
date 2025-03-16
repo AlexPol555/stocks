@@ -8,10 +8,11 @@ from database import get_connection, create_tables, load_data_from_db, load_dail
 from populate_database import bulk_populate_database_from_csv, incremental_populate_database_from_csv
 from stock_analyzer import StockAnalyzer
 from auto_update import auto_update_all_tickers, normalize_ticker, update_missing_market_data
-from visualization import plot_daily_analysis, plot_stock_analysis, plot_interactive_chart
+from visualization import plot_daily_analysis, plot_stock_analysis, plot_grafik_candle_days
 from indicators import get_calculated_data
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
 from orders import create_order
+# from testStr import optimize_strategy
 
 # Настройка страницы
 st.set_page_config(page_title="Анализ акций", layout="wide")
@@ -20,16 +21,15 @@ st.set_page_config(page_title="Анализ акций", layout="wide")
 @st.cache_data(show_spinner=True)
 def get_calculated_data_cached(_conn):
     # Аргумент с ведущим подчеркиванием не будет учитываться при хэшировании
-    return get_calculated_data(_conn)
-
-def clearCachGet_calculated_data():
-    get_calculated_data_cached.clear()
+    data = get_calculated_data(_conn)
+    # optimize_strategy(data)
+    return data
 
 def main_page(conn, analyzer, api_key):
     
     # Получаем данные с кэшированием
     df_all = get_calculated_data_cached(conn)
-    
+    # st.button("Очистить кэш",on_click=clear_get_calculated_data())
     # Настройки фильтрации: по дате, по тикеру или без фильтрации
     unique_dates = sorted(df_all["date"].unique(), reverse=True)
     tickers = df_all["contract_code"].unique()
@@ -56,8 +56,9 @@ def main_page(conn, analyzer, api_key):
     #     'Profit_Adaptive_Buy', 'Profit_Adaptive_Sell', 
     #     'Profit_New_Adaptive_Buy', 'Profit_New_Adaptive_Sell'
     # ]
-    filtered_df = filtered_df.loc[signals_filter]
+
     filtered_df = filtered_df.drop_duplicates()
+    filtered_df = filtered_df.loc[signals_filter]
     
     # Отображаем таблицу с помощью AgGrid
     gb = GridOptionsBuilder.from_dataframe(filtered_df)
@@ -96,7 +97,6 @@ def main_page(conn, analyzer, api_key):
             filtered_df = data[data['contract_code'] == selected_ticker]
             filtered_df_1 = filtered_df[filtered_df["metric_type"] == "Изменение"]
             filtered_df_2 = filtered_df[filtered_df["metric_type"] == "Открытые позиции"]
-            
             # Разбиваем экран на две колонки для отображения таблиц
             col1, col2 = st.columns(2)
             with col1:
@@ -104,10 +104,11 @@ def main_page(conn, analyzer, api_key):
             with col2:
                 st.dataframe(filtered_df_2)
             
+            # plot_grafik_candle_days(df_all, selected_ticker)
             # Отображаем график по тикеру
-            st.subheader("График по тикеру")
-            fig = plot_stock_analysis(data, selected_ticker)
-            st.pyplot(fig)
+            # st.subheader("График по тикеру")
+            # fig = plot_stock_analysis(data, selected_ticker)
+            # st.pyplot(fig)
         # Разбиваем экран на две колонки: левая — информация, правая — ввод заявки
         left_col, right_col = st.columns(2)
         with left_col:
@@ -115,63 +116,122 @@ def main_page(conn, analyzer, api_key):
             st.write(f"**Тикер:** {selected.get('contract_code')}")
             st.write(f"**Дата:** {selected.get('date')}")
             st.write(f"**Цена закрытия:** {selected.get('close')}")
-            # Дополнительные поля с информацией по ценам и показателям
-            st.write(f"**Long Fiz 1:** {selected.get('long_fiz_1', 'N/A')}")
-            st.write(f"**Short Fiz 2:** {selected.get('short_fiz_2', 'N/A')}")
-            st.write(f"**Long Jur 3:** {selected.get('long_jur_3', 'N/A')}")
-            st.write(f"**Short Jur 4:** {selected.get('short_jur_4', 'N/A')}")
             st.write(f"**RSI:** {selected.get('RSI', 'N/A')}")
             
-            # Расчёт соотношений, если значения заданы
-            long_fiz_1 = selected.get('long_fiz_1')
-            short_fiz_2 = selected.get('short_fiz_2')
-            long_jur_3 = selected.get('long_jur_3')
-            short_jur_4 = selected.get('short_jur_4')
-            if long_fiz_1 is not None and short_fiz_2 not in (None, 0):
-                st.write(f"**Соотношение (Long Fiz 1 / Short Fiz 2):** {long_fiz_1 / short_fiz_2:.2f}")
-            if long_jur_3 is not None and short_jur_4 not in (None, 0):
-                st.write(f"**Соотношение (Long Jur 3 / Short Jur 4):** {long_jur_3 / short_jur_4:.2f}")
+            # Определяем, какие сигналы сработали
+            triggered_signals = []
+            if selected.get('Signal') == 1:
+                triggered_signals.append("Базовый Buy")
+            elif selected.get('Signal') == -1:
+                triggered_signals.append("Базовый Sell")
+            
+            if selected.get('Adaptive_Buy_Signal') == 1:
+                triggered_signals.append("Adaptive Buy")
+            elif selected.get('Adaptive_Sell_Signal') == 1:
+                triggered_signals.append("Adaptive Sell")
+            
+            if selected.get('New_Adaptive_Buy_Signal') == 1:
+                triggered_signals.append("New Adaptive Buy")
+            elif selected.get('New_Adaptive_Sell_Signal') == -1:
+                triggered_signals.append("New Adaptive Sell")
+            
+            if triggered_signals:
+                st.write(f"**Сработавший сигнал:** {', '.join(triggered_signals)}")
+            else:
+                st.write("**Сработавший сигнал:** Нет")
+            
+            # Отображение динамической информации для каждого типа сигнала, если они сработали
+            if selected.get('Adaptive_Buy_Signal') == 1:
+                st.write(f"**Dynamic Profit (Adaptive Buy):** {selected.get('Dynamic_Profit_Adaptive_Buy', 'N/A')}")
+                st.write(f"**Exit Date (Adaptive Buy):** {selected.get('Exit_Date_Adaptive_Buy', 'N/A')}")
+                st.write(f"**Exit Price (Adaptive Buy):** {selected.get('Exit_Price_Adaptive_Buy', 'N/A')}")
+            if selected.get('Adaptive_Sell_Signal') == 1:
+                st.write(f"**Dynamic Profit (Adaptive Sell):** {-selected.get('Dynamic_Profit_Adaptive_Sell', 'N/A')}")
+                st.write(f"**Exit Date (Adaptive Sell):** {selected.get('Exit_Date_Adaptive_Sell', 'N/A')}")
+                st.write(f"**Exit Price (Adaptive Sell):** {selected.get('Exit_Price_Adaptive_Sell', 'N/A')}")
+            if selected.get('New_Adaptive_Buy_Signal') == 1:
+                st.write(f"**Dynamic Profit (New Adaptive Buy):** {selected.get('Dynamic_Profit_New_Adaptive_Buy', 'N/A')}")
+                st.write(f"**Exit Date (New Adaptive Buy):** {selected.get('Exit_Date_New_Adaptive_Buy', 'N/A')}")
+                st.write(f"**Exit Price (New Adaptive Buy):** {selected.get('Exit_Price_New_Adaptive_Buy', 'N/A')}")
+            if selected.get('New_Adaptive_Sell_Signal') == 1:
+                st.write(f"**Dynamic Profit (New Adaptive Sell):** {selected.get('Dynamic_Profit_New_Adaptive_Sell', 'N/A')}")
+                st.write(f"**Exit Date (New Adaptive Sell):** {selected.get('Exit_Date_New_Adaptive_Sell', 'N/A')}")
+                st.write(f"**Exit Price (New Adaptive Sell):** {selected.get('Exit_Price_New_Adaptive_Sell', 'N/A')}")
         
         with right_col:
-            st.markdown("## Параметры заявки")
-            volume = st.number_input("Объём заявки", min_value=1, value=100, step=1)
-            order_price = st.number_input("Цена заявки", min_value=0.0, value=float(selected.get("close", 0)))
+            print('dodelau')
+            # st.markdown("## Параметры заявки")
+            # volume = st.number_input("Объём заявки", min_value=1, value=100, step=1)
+            # order_price = st.number_input("Цена заявки", min_value=0.0, value=float(selected.get("close", 0)))
             
-            st.markdown("### Выберите действие")
-            col1, col2 = st.columns(2)
+            # st.markdown("### Выберите действие")
+            # col1, col2 = st.columns(2)
             
-            with col1:
-                if st.button("Купить"):
-                    result = create_order(
-                        ticker=selected.get("contract_code"),
-                        volume=volume,
-                        order_price=order_price,
-                        order_direction="BUY",
-                        analyzer=analyzer,
-                        account_id=account_id,
-                        api_key=api_key
-                    )
-                    st.success(result)
-            with col2:
-                if st.button("Продать"):
-                    result = create_order(
-                        ticker=selected.get("contract_code"),
-                        volume=volume,
-                        order_price=order_price,
-                        order_direction="SELL",
-                        analyzer=analyzer,
-                        account_id=account_id,
-                        api_key=api_key
-                    )
-                    st.success(result)
+            # with col1:
+            #     if st.button("Купить"):
+            #         result = create_order(
+            #             ticker=selected.get("contract_code"),
+            #             volume=volume,
+            #             order_price=order_price,
+            #             order_direction="BUY",
+            #             analyzer=analyzer,
+            #             account_id=account_id,
+            #             api_key=api_key
+            #         )
+            #         st.success(result)
+            # with col2:
+            #     if st.button("Продать"):
+            #         result = create_order(
+            #             ticker=selected.get("contract_code"),
+            #             volume=volume,
+            #             order_price=order_price,
+            #             order_direction="SELL",
+            #             analyzer=analyzer,
+            #             account_id=account_id,
+            #             api_key=api_key
+            #         )
+            #         st.success(result)
     else:
         st.info("Пожалуйста, выберите заявку из таблицы.")
     
+    df_signals = df_all[
+        (df_all['Adaptive_Buy_Signal'] == 1) |
+        (df_all['Adaptive_Sell_Signal'] == 1) |
+        (df_all['New_Adaptive_Buy_Signal'] == 1) |
+        (df_all['New_Adaptive_Sell_Signal'] == 1)
+    ].copy()
+
+# Фильтруем строки, где сработал хотя бы один сигнал (адаптивный или новый адаптивный)
+    df_signals = df_all[
+        (df_all['Adaptive_Buy_Signal'] == 1) |
+        (df_all['Adaptive_Sell_Signal'] == 1) |
+        (df_all['New_Adaptive_Buy_Signal'] == 1) |
+        (df_all['New_Adaptive_Sell_Signal'] == 1)
+    ].copy()
+
+    # Формируем столбцы прибыли для каждого типа сигналов на основе динамических расчетов
+    df_signals['Profit_Adaptive_Buy'] = np.where(
+        df_signals['Adaptive_Buy_Signal'] == 1,
+        df_signals['Dynamic_Profit_Adaptive_Buy'],
+        0
+    )
+    df_signals['Profit_Adaptive_Sell'] = np.where(
+        df_signals['Adaptive_Sell_Signal'] == 1,
+        df_signals['Dynamic_Profit_Adaptive_Sell'],
+        0
+    )
+    df_signals['Profit_New_Adaptive_Buy'] = np.where(
+        df_signals['New_Adaptive_Buy_Signal'] == 1,
+        df_signals['Dynamic_Profit_New_Adaptive_Buy'],
+        0
+    )
+    df_signals['Profit_New_Adaptive_Sell'] = np.where(
+        df_signals['New_Adaptive_Sell_Signal'] == 1,
+        df_signals['Dynamic_Profit_New_Adaptive_Sell'],
+        0
+    )
+
     # Итоговая сводка по сигналам (группировка по тикеру)
-    df_signals = df_all[(df_all['Adaptive_Buy_Signal'] == 1) |
-                        (df_all['Adaptive_Sell_Signal'] == 1) |
-                        (df_all['New_Adaptive_Buy_Signal'] == 1) |
-                        (df_all['New_Adaptive_Sell_Signal'] == 1)].copy()
     summary = df_signals.groupby('contract_code').agg(
         New_Adaptive_Buy_Signal=('New_Adaptive_Buy_Signal', 'sum'),
         New_Adaptive_Sell_Signal=('New_Adaptive_Sell_Signal', 'sum'),
@@ -182,13 +242,15 @@ def main_page(conn, analyzer, api_key):
         Profit_New_Adaptive_Buy=('Profit_New_Adaptive_Buy', 'sum'),
         Profit_New_Adaptive_Sell=('Profit_New_Adaptive_Sell', 'sum')
     ).reset_index()
-    
+
     st.write(summary)
-    
+
     # Агрегация по месяцам и неделям
     df_signals['date'] = pd.to_datetime(df_signals['date'])
     df_signals['month'] = df_signals['date'].dt.to_period('M')
     df_signals['week'] = df_signals['date'].dt.to_period('W')
+    df_signals['year'] = df_signals['date'].dt.to_period('Y')
+
     summary_by_month = df_signals.groupby('month').agg(
         Adaptive_Buy_Signal=('Adaptive_Buy_Signal', 'sum'),
         Adaptive_Sell_Signal=('Adaptive_Sell_Signal', 'sum'),
@@ -199,6 +261,7 @@ def main_page(conn, analyzer, api_key):
         Profit_New_Adaptive_Buy=('Profit_New_Adaptive_Buy', 'sum'),
         Profit_New_Adaptive_Sell=('Profit_New_Adaptive_Sell', 'sum')
     ).reset_index()
+
     summary_by_week = df_signals.groupby('week').agg(
         Adaptive_Buy_Signal=('Adaptive_Buy_Signal', 'sum'),
         Adaptive_Sell_Signal=('Adaptive_Sell_Signal', 'sum'),
@@ -209,11 +272,24 @@ def main_page(conn, analyzer, api_key):
         Profit_New_Adaptive_Buy=('Profit_New_Adaptive_Buy', 'sum'),
         Profit_New_Adaptive_Sell=('Profit_New_Adaptive_Sell', 'sum')
     ).reset_index()
-    
+
+    summary_by_year = df_signals.groupby('year').agg(
+        Adaptive_Buy_Signal=('Adaptive_Buy_Signal', 'sum'),
+        Adaptive_Sell_Signal=('Adaptive_Sell_Signal', 'sum'),
+        New_Adaptive_Buy_Signal=('New_Adaptive_Buy_Signal', 'sum'),
+        New_Adaptive_Sell_Signal=('New_Adaptive_Sell_Signal', 'sum'),
+        Profit_Adaptive_Buy=('Profit_Adaptive_Buy', 'sum'),
+        Profit_Adaptive_Sell=('Profit_Adaptive_Sell', 'sum'),
+        Profit_New_Adaptive_Buy=('Profit_New_Adaptive_Buy', 'sum'),
+        Profit_New_Adaptive_Sell=('Profit_New_Adaptive_Sell', 'sum')
+    ).reset_index()
+
     st.write("### Сводка по месяцам:")
     st.write(summary_by_month)
     st.write("### Сводка по неделям:")
     st.write(summary_by_week)
+    st.write("### Сводка по неделям:")
+    st.write(summary_by_year)
 
 def update_data_page(conn, analyzer):
     st.header("Обновление данных")
@@ -253,7 +329,7 @@ def update_data_page(conn, analyzer):
         if st.button("Запустить обновление через API"):
             with st.spinner("Обновление данных через API..."):
                 if api_update_mode == "Полное обновление":
-                    clearCachGet_calculated_data()
+                    # clear_get_calculated_data()
                     log_messages = auto_update_all_tickers(analyzer, conn)
                 else:
                     cursor = conn.cursor()

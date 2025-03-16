@@ -15,9 +15,18 @@ def create_tables(conn):
     cursor = conn.cursor()
     # Таблица компаний
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS companies (
+    CREATE TABLE IF NOT EXISTS company_parameters (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        contract_code TEXT UNIQUE
+        contract_code TEXT UNIQUE,
+        stop_loss_multiplier REAL,
+        take_profit_multiplier REAL,
+        max_holding_days INTEGER,
+        rsi_period INTEGER,
+        macd_fast_period INTEGER,
+        macd_slow_period INTEGER,
+        macd_signal_period INTEGER,
+        bb_period INTEGER,
+        bb_std_multiplier REAL
     );
     """)
     # Таблица daily_data

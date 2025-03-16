@@ -2,17 +2,22 @@ from datetime import datetime, timezone
 from tinkoff.invest import Client, RequestError, OrderDirection, OrderType, Quotation
 
 def create_order(ticker: str, volume: int, order_price: float, order_direction: str,
-                 analyzer, account_id: str, api_key: str):
+                 analyzer, account_id: str) -> str:
     """
-    Создаёт заявку для заданного тикера.
-    Если order_price > 0, отправляется лимитная заявка, иначе — рыночная.
+    Создаёт заявку для указанного тикера.
+    Если order_price > 0, отправляется лимитная заявка, иначе – рыночная.
     order_direction: "BUY" или "SELL".
     """
+    api_key = analyzer.api_key  # Используем API-ключ из экземпляра analyzer
+    figi_mapping = analyzer.get_figi_mapping()
+    norm_ticker = normalize_ticker(ticker)
+    if norm_ticker not in figi_mapping:
+        return f"FIGI для тикера {ticker} не найден."
     FIGI = analyzer.get_figi_mapping()
     
     try:
         with Client(api_key) as client:
-            # Генерируем уникальный идентификатор заявки, используя осведомлённое время UTC
+            # Используем осведомлённое время (UTC) для генерации уникального order_id
             order_id = str(datetime.now(timezone.utc).timestamp())
             
             if order_price > 0:
@@ -30,7 +35,7 @@ def create_order(ticker: str, volume: int, order_price: float, order_direction: 
                         direction=OrderDirection.ORDER_DIRECTION_BUY,
                         order_type=OrderType.ORDER_TYPE_LIMIT
                     )
-                else:  # SELL
+                else:
                     response = client.orders.post_order(
                         order_id=order_id,
                         figi=FIGI,
@@ -51,7 +56,7 @@ def create_order(ticker: str, volume: int, order_price: float, order_direction: 
                         direction=OrderDirection.ORDER_DIRECTION_BUY,
                         order_type=OrderType.ORDER_TYPE_MARKET
                     )
-                else:  # SELL
+                else:
                     response = client.orders.post_order(
                         order_id=order_id,
                         figi=FIGI,

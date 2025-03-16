@@ -2,6 +2,9 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import plotly.express as px
+import mplfinance as mpf
+import streamlit as st
+
 
 def plot_daily_analysis(data, date_value) -> plt.Figure:
     # Используем столбцы 'date' и 'metric_type'
@@ -98,3 +101,28 @@ def plot_interactive_chart(data, stock_code):
         labels={'date': 'Дата', 'value1': 'Value1'}
     )
     return fig
+
+def plot_grafik_candle_days(df, selected_ticker):
+    df_filtered = df[df['contract_code'] == selected_ticker].copy()
+
+    df_filtered['date'] = pd.to_datetime(df_filtered['date'])
+    df_filtered.set_index('date', inplace=True)
+    df_filtered.sort_index(inplace=True)
+
+    # Определяем дату начала для последнего месяца
+    last_month_date = pd.Timestamp.today() - pd.DateOffset(months=1)
+
+    # Фильтруем данные за последний месяц
+    df_last_month = df_filtered[df_filtered.index >= last_month_date]
+
+    # Построение графика с помощью mplfinance
+    fig, axlist = mpf.plot(
+        df_filtered,
+        type='candle',
+        volume=True,
+        returnfig=True,
+        title=f"Candlestick Chart for {selected_ticker} за последний месяц",
+        style='default'
+    )
+
+    st.pyplot(fig)
