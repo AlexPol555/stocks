@@ -130,81 +130,118 @@ def generate_new_adaptive_signals(data):
     return data
 
 
-def vectorized_dynamic_profit(data, signal_col, profit_col, exit_date_col, exit_price_col,
-                              max_holding_days=3, stop_loss_multiplier=0.6, take_profit_multiplier=1.3,
-                              is_short=False):
+def calculate_additional_filters(data):
+    # Фильтр объёма: сигнал считается, если объём выше 20-дневного среднего
+    data['Volume_Filter'] = data['volume'] > data['volume'].rolling(window=20).mean()
+    
+    # Фильтр волатильности: ограничение по ATR, можно задать через квантиль или фиксированные значения
+    lower_bound = data['ATR'].quantile(0.25)  # нижняя граница
+    upper_bound = data['ATR'].quantile(0.75)  # верхняя граница
+    data['Volatility_Filter'] = (data['ATR'] > lower_bound) & (data['ATR'] < upper_bound)
+    
+    # Фильтр свечных паттернов: предполагается, что столбец 'Candle_Pattern' уже рассчитан
+    valid_patterns = ['bullish_engulfing', 'hammer', 'morning_star']
+    # data['Candlestick_Filter'] = data['Candle_Pattern'].isin(valid_patterns)
+    
+    # Фильтр тренда: используем ADX, сигнал считается, если ADX выше порога, например, 25
+    adx_threshold = 25
+    # data['Trend_Filter'] = data['ADX'] > adx_threshold
+    
+    return data
+
+def generate_final_adaptive_signals(data):
+    """
+    Объединяем адаптивные сигналы с дополнительными фильтрами для уточнения входа.
+    """
+    # Предполагается, что базовые адаптивные сигналы уже сгенерированы:
+    # 'Adaptive_Buy_Signal' и 'New_Adaptive_Buy_Signal'
+    # Сначала объединяем их (это можно настроить по желанию)
+    data['Combined_Buy_Signal'] = (data['Adaptive_Buy_Signal'] | data['New_Adaptive_Buy_Signal']).astype(int)
+    
+    # Применяем дополнительные фильтры
+    data = calculate_additional_filters(data)
+    
+    # Финальный сигнал покупки с учетом всех условий
+    data['Final_Buy_Signal'] = (
+        data['Combined_Buy_Signal'] &
+        data['Volume_Filter'] &
+        data['Volatility_Filter']
+    ).astype(int)
+    
+    # Аналогично можно создать сигнал продажи, если требуется
+    return data
+
+def vectorized_dynamic_profit(data, signal_col, profit_col, exit_date_col, exit_price_col, 
+                              max_holding_days=3, is_short=False):
+
     close = data['close'].values
-    max1 = data['high'].values
-    min1 = data['low'].values
-    atr = data['ATR'].values
-    signals = data[signal_col].values
     n = len(data)
     
     profits = np.full(n, np.nan, dtype=float)
     exit_dates = np.array([None] * n)
     exit_prices = np.full(n, np.nan, dtype=float)
     
-    for i in np.where(signals != 0)[0]:
+    for i in np.where(data[signal_col] != 0)[0]:
         entry_price = close[i]
-        atr_value = atr[i]
-        if atr_value == 0 or np.isnan(atr_value):
-            continue
-        
-        # Если позиция короткая, определяем стоп-лосс и тейк-профит для продажи
-        if is_short:
-            stop_loss = entry_price + stop_loss_multiplier * atr_value
-            take_profit = entry_price - take_profit_multiplier * atr_value
-        else:
-            stop_loss = entry_price - stop_loss_multiplier * atr_value
-            take_profit = entry_price + take_profit_multiplier * atr_value
-
         exit_price = None
         exit_date = None
         
-        # Перебираем последующие дни до max_holding_days
-        for j in range(i+1, min(i+1+max_holding_days, n)):
-            day_low = data.iloc[j]['low']
-            day_high = data.iloc[j]['high']
-            
-            if not is_short:  # длинная позиция
-                if day_low <= stop_loss:
-                    exit_price = stop_loss
-                    exit_date = data.iloc[j]['date']
-                    break
-                if day_high >= take_profit:
-                    exit_price = take_profit
-                    exit_date = data.iloc[j]['date']
-                    break
-            else:  # короткая позиция
-                if day_high >= stop_loss:
-                    exit_price = stop_loss
-                    exit_date = data.iloc[j]['date']
-                    break
-                if day_low <= take_profit:
-                    exit_price = take_profit
-                    exit_date = data.iloc[j]['date']
-                    break
+        # Определяем границы периода для оценки (дни с i+1 по i+max_holding_days)
+        start = i + 1
+        end = min(i + max_holding_days + 1, n)  # +1, чтобы включить последний день
         
-        # Если ни одно условие не сработало, берем цену последнего дня в периоде
-        if exit_price is None:
-            exit_index = min(i+max_holding_days, n-1)
-            exit_price = max1[exit_index]
+        # Если период пустой (например, сигнал в последнем дне), используем резервный вариант
+        if start >= n:
+            exit_index = min(i + max_holding_days, n - 1)
+            if not is_short:
+                exit_price = entry_price * (1 - 0.005)
+            else:
+                exit_price = entry_price * (1 + 0.005)
             exit_date = data.iloc[exit_index]['date']
+        else:
+            period_data = data.iloc[start:end]
+            
+            if not is_short:
+                # Длинная позиция: ищем дни, когда high >= entry_price * (1 + 0.005)
+                condition = period_data['high'] >= entry_price * (1 + 0.005)
+                valid_days = period_data[condition]
+                
+                if not valid_days.empty:
+                    # Берем максимальное значение high за период и соответствующую дату
+                    exit_price = valid_days['high'].max()
+                    exit_date = valid_days.loc[valid_days['high'].idxmax()]['date']
+                else:
+                    # Если условия не выполнены, фиксированный выход по цене -0,5%
+                    exit_price = entry_price * (1 - 0.005)
+                    exit_date = period_data.iloc[-1]['date']
+            else:
+                # Короткая позиция: ищем дни, когда low <= entry_price * (1 - 0.005)
+                condition = period_data['low'] <= entry_price * (1 - 0.005)
+                valid_days = period_data[condition]
+                
+                if not valid_days.empty:
+                    # Берем минимальное значение low за период и соответствующую дату
+                    exit_price = valid_days['low'].min()
+                    exit_date = valid_days.loc[valid_days['low'].idxmin()]['date']
+                else:
+                    # Если условия не выполнены, фиксированный выход по цене +0,5%
+                    exit_price = entry_price * (1 + 0.005)
+                    exit_date = period_data.iloc[-1]['date']
         
         # Расчет прибыли
-        if not is_short:
-            profit = (exit_price - entry_price) / entry_price * 100
-        else:
-            profit = (entry_price - exit_price) / entry_price * 100
-        
-        profits[i] = profit
-        exit_dates[i] = exit_date
-        exit_prices[i] = exit_price
+        if exit_price is not None:
+            if not is_short:
+                profit = (exit_price - entry_price) / entry_price * 100
+            else:
+                profit = (entry_price - exit_price) / entry_price * 100
+            profits[i] = profit
+            exit_prices[i] = exit_price
+            exit_dates[i] = exit_date
 
     data[profit_col] = profits
     data[exit_date_col] = exit_dates
     data[exit_price_col] = exit_prices
-
+    
     return data
 
 def calculate_technical_indicators(data):
@@ -224,6 +261,9 @@ def calculate_technical_indicators(data):
     if 'ATR' not in data.columns:
         data = calculate_additional_indicators(data)
     
+    # Применяем интеграцию дополнительных фильтров и формируем финальные адаптивные сигналы
+    data = generate_final_adaptive_signals(data)
+    
     # Вычисляем динамический профит для базового сигнала
     data = vectorized_dynamic_profit(data, 'Signal', 
                                      'Dynamic_Profit_Base', 'Exit_Date_Base', 'Exit_Price_Base')
@@ -232,17 +272,20 @@ def calculate_technical_indicators(data):
                                      'Dynamic_Profit_Adaptive_Buy', 'Exit_Date_Adaptive_Buy', 'Exit_Price_Adaptive_Buy')
     data = vectorized_dynamic_profit(data, 'Adaptive_Sell_Signal', 
                                      'Dynamic_Profit_Adaptive_Sell', 'Exit_Date_Adaptive_Sell', 'Exit_Price_Adaptive_Sell',
-                                 is_short=True)
+                                     is_short=True)
     # Вычисляем динамический профит для новых адаптивных сигналов (покупка и продажа)
     data = vectorized_dynamic_profit(data, 'New_Adaptive_Buy_Signal', 
                                      'Dynamic_Profit_New_Adaptive_Buy', 'Exit_Date_New_Adaptive_Buy', 'Exit_Price_New_Adaptive_Buy')
     data = vectorized_dynamic_profit(data, 'New_Adaptive_Sell_Signal', 
-                                 'Dynamic_Profit_New_Adaptive_Sell', 'Exit_Date_New_Adaptive_Sell', 'Exit_Price_New_Adaptive_Sell',
-                                 is_short=True)
+                                     'Dynamic_Profit_New_Adaptive_Sell', 'Exit_Date_New_Adaptive_Sell', 'Exit_Price_New_Adaptive_Sell',
+                                     is_short=True)
+    
+    # Можно добавить расчет динамического профита и для финального сигнала, если потребуется
+    data = vectorized_dynamic_profit(data, 'Final_Buy_Signal', 
+                                     'Dynamic_Profit_Final_Buy', 'Exit_Date_Final_Buy', 'Exit_Price_Final_Buy')
     
     return data
-
-# @st.cache_data(show_spinner=True)
+@st.cache_data(show_spinner=True)
 def get_calculated_data(_conn):
     """
     Функция получает данные, группирует их по контракту и для каждой группы рассчитывает индикаторы.
@@ -258,3 +301,6 @@ def get_calculated_data(_conn):
     df_all = pd.concat(results)
     
     return df_all.drop_duplicates()
+
+def clear_get_calculated_data():
+    get_calculated_data.clear()

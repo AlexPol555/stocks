@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import pyperclip
 
 # Импорт необходимых функций из ваших модулей
 from database import get_connection, create_tables, load_data_from_db, load_daily_data_from_db, mergeMetrDaily
@@ -9,7 +10,7 @@ from populate_database import bulk_populate_database_from_csv, incremental_popul
 from stock_analyzer import StockAnalyzer
 from auto_update import auto_update_all_tickers, normalize_ticker, update_missing_market_data
 from visualization import plot_daily_analysis, plot_stock_analysis, plot_grafik_candle_days
-from indicators import get_calculated_data
+from indicators import get_calculated_data, clear_get_calculated_data
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
 from orders import create_order
 # from testStr import optimize_strategy
@@ -18,18 +19,21 @@ from orders import create_order
 st.set_page_config(page_title="Анализ акций", layout="wide")
 
 # Функция с кэшированием расчётов технических индикаторов
-@st.cache_data(show_spinner=True)
+# @st.cache_data(show_spinner=True)
 def get_calculated_data_cached(_conn):
     # Аргумент с ведущим подчеркиванием не будет учитываться при хэшировании
     data = get_calculated_data(_conn)
     # optimize_strategy(data)
     return data
 
+# def clear_get_calculated_data_cached():
+#     get_calculated_data_cached.clear()
+
 def main_page(conn, analyzer, api_key):
     
     # Получаем данные с кэшированием
     df_all = get_calculated_data_cached(conn)
-    # st.button("Очистить кэш",on_click=clear_get_calculated_data())
+    st.button("Очистить кэш",on_click=clear_get_calculated_data())
     # Настройки фильтрации: по дате, по тикеру или без фильтрации
     unique_dates = sorted(df_all["date"].unique(), reverse=True)
     tickers = df_all["contract_code"].unique()
@@ -82,7 +86,7 @@ def main_page(conn, analyzer, api_key):
         elif isinstance(selected_rows, list):
             if len(selected_rows) > 0:
                 selected = selected_rows[0]
-    
+
     if selected is not None:
             # Автоматически выбираем тикер из выбранной строки
         selected_ticker = selected.get("contract_code")
@@ -117,12 +121,14 @@ def main_page(conn, analyzer, api_key):
             st.write(f"**Дата:** {selected.get('date')}")
             st.write(f"**Цена закрытия:** {selected.get('close')}")
             st.write(f"**RSI:** {selected.get('RSI', 'N/A')}")
+            st.write(f"**ATR:** {selected.get('ATR', 'N/A')}")
+            st.write(f"**Final_Buy_Signal:** {selected.get('Final_Buy_Signal', 'N/A')}")
             
             # Определяем, какие сигналы сработали
             triggered_signals = []
             if selected.get('Signal') == 1:
                 triggered_signals.append("Базовый Buy")
-            elif selected.get('Signal') == -1:
+            elif selected.get('Signal') == 1:
                 triggered_signals.append("Базовый Sell")
             
             if selected.get('Adaptive_Buy_Signal') == 1:
@@ -132,7 +138,7 @@ def main_page(conn, analyzer, api_key):
             
             if selected.get('New_Adaptive_Buy_Signal') == 1:
                 triggered_signals.append("New Adaptive Buy")
-            elif selected.get('New_Adaptive_Sell_Signal') == -1:
+            elif selected.get('New_Adaptive_Sell_Signal') == 1:
                 triggered_signals.append("New Adaptive Sell")
             
             if triggered_signals:
@@ -146,7 +152,7 @@ def main_page(conn, analyzer, api_key):
                 st.write(f"**Exit Date (Adaptive Buy):** {selected.get('Exit_Date_Adaptive_Buy', 'N/A')}")
                 st.write(f"**Exit Price (Adaptive Buy):** {selected.get('Exit_Price_Adaptive_Buy', 'N/A')}")
             if selected.get('Adaptive_Sell_Signal') == 1:
-                st.write(f"**Dynamic Profit (Adaptive Sell):** {-selected.get('Dynamic_Profit_Adaptive_Sell', 'N/A')}")
+                st.write(f"**Dynamic Profit (Adaptive Sell):** {selected.get('Dynamic_Profit_Adaptive_Sell', 'N/A')}")
                 st.write(f"**Exit Date (Adaptive Sell):** {selected.get('Exit_Date_Adaptive_Sell', 'N/A')}")
                 st.write(f"**Exit Price (Adaptive Sell):** {selected.get('Exit_Price_Adaptive_Sell', 'N/A')}")
             if selected.get('New_Adaptive_Buy_Signal') == 1:
@@ -256,6 +262,7 @@ def main_page(conn, analyzer, api_key):
         Adaptive_Sell_Signal=('Adaptive_Sell_Signal', 'sum'),
         New_Adaptive_Buy_Signal=('New_Adaptive_Buy_Signal', 'sum'),
         New_Adaptive_Sell_Signal=('New_Adaptive_Sell_Signal', 'sum'),
+        Profit=('Final_Buy_Signal', 'sum'),
         Profit_Adaptive_Buy=('Profit_Adaptive_Buy', 'sum'),
         Profit_Adaptive_Sell=('Profit_Adaptive_Sell', 'sum'),
         Profit_New_Adaptive_Buy=('Profit_New_Adaptive_Buy', 'sum'),
@@ -392,6 +399,25 @@ def charts_page(conn):
             fig = plot_stock_analysis(data, selected_ticker)
             st.pyplot(fig)
 
+def countPosition(conn):
+    data = load_data_from_db(conn)
+    df = pd.DataFrame(data)
+
+    # Преобразуем столбец date в тип datetime, если требуется:
+    df['date'] = pd.to_datetime(df['date'])
+
+    # Определяем последнюю доступную дату:
+    last_date = df['date'].max()
+
+    # Фильтруем строки по последней дате:
+    df_last = df[df['date'] == last_date]
+
+    # Суммируем нужные столбцы:
+    sums = df_last[['value1', 'value2', 'value3', 'value4']].sum()
+
+    return sums
+
+
 def main():
     conn = get_connection()
     create_tables(conn)
@@ -407,6 +433,7 @@ def main():
     elif navigation == "Графики":
         charts_page(conn)
     
+    st.sidebar.bar_chart(countPosition(conn))
     conn.close()
 
 if __name__ == "__main__":

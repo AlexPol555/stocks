@@ -84,7 +84,7 @@ def load_data_from_db(conn) -> pd.DataFrame:
     JOIN companies c ON m.company_id = c.id
     """
     df = pd.read_sql(query, conn)
-    return df
+    return df.drop_duplicates()
 
 def load_daily_data_from_db(conn, start_date=None, end_date=None) -> pd.DataFrame:
     query = """
@@ -105,7 +105,7 @@ def load_daily_data_from_db(conn, start_date=None, end_date=None) -> pd.DataFram
     if end_date:
         query += f" AND dd.date <= '{end_date}'"
     df = pd.read_sql(query, conn)
-    return df
+    return df.drop_duplicates()
 
 def update_technical_indicators(conn, daily_data_id, indicators):
     cursor = conn.cursor()
@@ -202,4 +202,4 @@ def mergeMetrDaily(conn) -> pd.DataFrame:
     # Преобразование в DataFrame
     df = pd.DataFrame(data, columns=columns)
 
-    return df
+    return df.drop_duplicates()
