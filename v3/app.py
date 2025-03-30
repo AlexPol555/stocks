@@ -48,26 +48,49 @@ def main_page(conn, analyzer, api_key):
         filtered_df = df_all.copy()
     
     # Фильтруем строки с сигналами
-    signals_filter = (
-        (filtered_df['Adaptive_Buy_Signal'] == 1) |
-        (filtered_df['Adaptive_Sell_Signal'] == 1) |
-        (filtered_df['New_Adaptive_Buy_Signal'] == 1) |
-        (filtered_df['New_Adaptive_Sell_Signal'] == 1)
-    )
+    # signals_filter = (
+    #     (filtered_df['Adaptive_Buy_Signal'] == 1) |
+    #     (filtered_df['Adaptive_Sell_Signal'] == 1) |
+    #     (filtered_df['New_Adaptive_Buy_Signal'] == 1) |
+    #     (filtered_df['New_Adaptive_Sell_Signal'] == 1)
+    # )
     # cols_to_show = [
     #     'contract_code', 'date', 'Adaptive_Buy_Signal', 'Adaptive_Sell_Signal', 
     #     'New_Adaptive_Buy_Signal', 'New_Adaptive_Sell_Signal', 
     #     'Profit_Adaptive_Buy', 'Profit_Adaptive_Sell', 
     #     'Profit_New_Adaptive_Buy', 'Profit_New_Adaptive_Sell'
     # ]
+    col1, col2, col3, col4 = st.columns(4)
+    adaptive_buy = col1.checkbox("Adaptive Buy Signal", value=True)
+    adaptive_sell = col2.checkbox("Adaptive Sell Signal", value=True)
+    new_adaptive_buy = col3.checkbox("New Adaptive Buy Signal", value=True)
+    new_adaptive_sell = col4.checkbox("New Adaptive Sell Signal", value=True)
 
-    filtered_df = filtered_df.drop_duplicates()
-    filtered_df = filtered_df.loc[signals_filter]
-    
-    # Отображаем таблицу с помощью AgGrid
+    # Построение условия фильтрации
+    condition = False
+    if adaptive_buy:
+        condition |= (filtered_df['Adaptive_Buy_Signal'] == 1)
+    if adaptive_sell:
+        condition |= (filtered_df['Adaptive_Sell_Signal'] == 1)
+    if new_adaptive_buy:
+        condition |= (filtered_df['New_Adaptive_Buy_Signal'] == 1)
+    if new_adaptive_sell:
+        condition |= (filtered_df['New_Adaptive_Sell_Signal'] == 1)
+
+    # Если ни один чекбокс не отмечен, выводим полный DataFrame
+    if condition is not False:
+        filtered_df = filtered_df[condition]
+    else:
+        filtered_df = filtered_df.copy()
+
+    # Конфигурация AgGrid
     gb = GridOptionsBuilder.from_dataframe(filtered_df)
     gb.configure_selection(selection_mode="single", use_checkbox=False)
     gridOptions = gb.build()
+
+    # Отображение AgGrid с автоматическим обновлением
+    filtered_df = filtered_df.drop_duplicates()
+    
     grid_response = AgGrid(
         filtered_df,
         gridOptions=gridOptions,
@@ -75,6 +98,17 @@ def main_page(conn, analyzer, api_key):
         update_mode=GridUpdateMode.SELECTION_CHANGED,
         theme="alpine"
     )
+    # Отображаем таблицу с помощью AgGrid
+    # gb = GridOptionsBuilder.from_dataframe(filtered_df)
+    # gb.configure_selection(selection_mode="single", use_checkbox=False)
+    # gridOptions = gb.build()
+    # grid_response = AgGrid(
+    #     filtered_df,
+    #     gridOptions=gridOptions,
+    #     data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
+    #     update_mode=GridUpdateMode.SELECTION_CHANGED,
+    #     theme="alpine"
+    # )
     
     # Извлекаем выбранную строку
     selected_rows = grid_response.get("selected_rows")
@@ -262,7 +296,6 @@ def main_page(conn, analyzer, api_key):
         Adaptive_Sell_Signal=('Adaptive_Sell_Signal', 'sum'),
         New_Adaptive_Buy_Signal=('New_Adaptive_Buy_Signal', 'sum'),
         New_Adaptive_Sell_Signal=('New_Adaptive_Sell_Signal', 'sum'),
-        Profit=('Final_Buy_Signal', 'sum'),
         Profit_Adaptive_Buy=('Profit_Adaptive_Buy', 'sum'),
         Profit_Adaptive_Sell=('Profit_Adaptive_Sell', 'sum'),
         Profit_New_Adaptive_Buy=('Profit_New_Adaptive_Buy', 'sum'),
@@ -285,10 +318,12 @@ def main_page(conn, analyzer, api_key):
         Adaptive_Sell_Signal=('Adaptive_Sell_Signal', 'sum'),
         New_Adaptive_Buy_Signal=('New_Adaptive_Buy_Signal', 'sum'),
         New_Adaptive_Sell_Signal=('New_Adaptive_Sell_Signal', 'sum'),
+        Profit=('Final_Buy_Signal', 'sum'),
         Profit_Adaptive_Buy=('Profit_Adaptive_Buy', 'sum'),
         Profit_Adaptive_Sell=('Profit_Adaptive_Sell', 'sum'),
         Profit_New_Adaptive_Buy=('Profit_New_Adaptive_Buy', 'sum'),
-        Profit_New_Adaptive_Sell=('Profit_New_Adaptive_Sell', 'sum')
+        Profit_New_Adaptive_Sell=('Profit_New_Adaptive_Sell', 'sum'),
+        Profit_Profit=('Dynamic_Profit_Final_Buy', 'sum')
     ).reset_index()
 
     st.write("### Сводка по месяцам:")
