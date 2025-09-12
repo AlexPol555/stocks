@@ -20,18 +20,18 @@ from orders import create_order
 # Настройка страницы
 st.set_page_config(page_title="Анализ акций", layout="wide")
 
-# guarded import для st_aggrid — если библиотека не установлена, используем fallback
+# guarded import для st_aggrid — если пакет не установлен, используем fallback (st.dataframe)
 try:
     from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
     ST_AGGRID_AVAILABLE = True
-except Exception as e:
+except Exception as _e:
     ST_AGGRID_AVAILABLE = False
     import streamlit as st
     import logging
     logger = logging.getLogger(__name__)
-    logger.warning("st_aggrid не найден: %s", e)
+    logger.warning("st_aggrid не найден: %s", _e)
 
-    # Простейшая заглушка: отобразить DataFrame через st.dataframe
+    # Простая заглушка: отобразить DataFrame через st.dataframe и вернуть объект с data
     def AgGrid(df, gridOptions=None, height=400, fit_columns_on_grid_load=True, **kwargs):
         st.dataframe(df)
         class _Res:
@@ -43,6 +43,7 @@ except Exception as e:
         @staticmethod
         def from_dataframe(df):
             return {}
+
     GridUpdateMode = None
     DataReturnMode = None
 
