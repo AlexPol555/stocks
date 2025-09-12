@@ -123,3 +123,118 @@ class StockAnalyzer:
         except Exception as e:
             logger.error(f"Ошибка при вызове GetTechAnalysis: {e}")
             return {}
+def get_stock_data(self, figi: str) -> pd.DataFrame:
+    """
+    Возвращает DataFrame с историческими свечами для FIGI.
+    Сначала пытаемся через Tinkoff API (если SDK + api_key доступны).
+    Если API недоступен или api_key отсутствует — пытаемся прочитать из local DB (companies.figi -> daily_data).
+    Формат возвращаемого DF: ['time', 'open', 'close', 'high', 'low', 'volume']
+    """
+    import pandas as pd
+    from datetime import datetime, timedelta, timezone
+
+    if not figi:
+        logger.warning("get_stock_data: figi пустой, возвращаю пустой DataFrame.")
+        return pd.DataFrame()
+
+    # Попытка динамически импортировать Tinkoff SDK
+    try:
+        from tinkoff.invest import Client, CandleInterval
+        from tinkoff.invest.utils import quotation_to_decimal
+    except Exception as e:
+        logger.info("Tinkoff SDK недоступен или не установлен: %s. Попытка fallback из БД.", e)
+        # fallback: попытаться прочитать из local DB (companies.figi -> daily_data)
+        if not getattr(self, "db_conn", None):
+            logger.warning("DB connection не передан, fallback невозможен — возвращаю пустой DataFrame.")
+            return pd.DataFrame()
+        try:
+            query = """
+            SELECT dd.date as time, dd.open, dd.close, dd.high, dd.low, dd.volume
+            FROM daily_data dd
+            JOIN companies c ON dd.company_id = c.id
+            WHERE c.figi = ?
+            ORDER BY dd.date ASC
+            """
+            df = pd.read_sql_query(query, self.db_conn, params=(figi,))
+            if df.empty:
+                return pd.DataFrame()
+            df['time'] = pd.to_datetime(df['time'])
+            return df[['time', 'open', 'close', 'high', 'low', 'volume']]
+        except Exception as ex:
+            logger.exception("Ошибка чтения свечей из БД: %s", ex)
+            return pd.DataFrame()
+
+    # Если SDK доступен — проверяем api_key
+    if not self.api_key:
+        logger.warning("API key не задан — не могу вызвать Tinkoff API. Попробую fallback из БД.")
+        # попытка fallback из БД
+        if getattr(self, "db_conn", None):
+            try:
+                query = """
+                SELECT dd.date as time, dd.open, dd.close, dd.high, dd.low, dd.volume
+                FROM daily_data dd
+                JOIN companies c ON dd.company_id = c.id
+                WHERE c.figi = ?
+                ORDER BY dd.date ASC
+                """
+                df = pd.read_sql_query(query, self.db_conn, params=(figi,))
+                if df.empty:
+                    return pd.DataFrame()
+                df['time'] = pd.to_datetime(df['time'])
+                return df[['time', 'open', 'close', 'high', 'low', 'volume']]
+            except Exception as ex:
+                logger.exception("Fallback DB read failed: %s", ex)
+                return pd.DataFrame()
+        return pd.DataFrame()
+
+    # Вызываем Tinkoff API для исторических свечей (последний год)
+    try:
+        with Client(self.api_key) as client:
+            market_data = client.market_data
+            to_date = datetime.now(timezone.utc)
+            from_date = to_date - timedelta(days=365)
+            res = market_data.get_candles(
+                figi=figi,
+                from_=from_date,
+                to=to_date,
+                interval=CandleInterval.CANDLE_INTERVAL_DAY
+            )
+            candles = getattr(res, "candles", None) or []
+            if not candles:
+                logger.info("Tinkoff API вернул пустой список свечей для FIGI %s", figi)
+                return pd.DataFrame()
+
+            data = pd.DataFrame([{
+                "time": candle.time,
+                "open": quotation_to_decimal(candle.open),
+                "close": quotation_to_decimal(candle.close),
+                "high": quotation_to_decimal(candle.high),
+                "low": quotation_to_decimal(candle.low),
+                "volume": candle.volume
+            } for candle in candles])
+
+            # Приводим time к datetime, сортируем
+            data['time'] = pd.to_datetime(data['time'])
+            data.sort_values(by='time', inplace=True)
+            return data[['time', 'open', 'close', 'high', 'low', 'volume']]
+
+    except Exception as e:
+        logger.exception("Ошибка при получении свечей через Tinkoff API: %s", e)
+        # Попытка fallback в DB, если доступна
+        if getattr(self, "db_conn", None):
+            try:
+                query = """
+                SELECT dd.date as time, dd.open, dd.close, dd.high, dd.low, dd.volume
+                FROM daily_data dd
+                JOIN companies c ON dd.company_id = c.id
+                WHERE c.figi = ?
+                ORDER BY dd.date ASC
+                """
+                df = pd.read_sql_query(query, self.db_conn, params=(figi,))
+                if df.empty:
+                    return pd.DataFrame()
+                df['time'] = pd.to_datetime(df['time'])
+                return df[['time', 'open', 'close', 'high', 'low', 'volume']]
+            except Exception as ex:
+                logger.exception("Fallback DB read failed: %s", ex)
+        return pd.DataFrame()
