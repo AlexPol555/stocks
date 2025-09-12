@@ -476,6 +476,164 @@ def countPosition(conn):
     return sums
 
 
+DB_PATH = os.environ.get("STOCK_DB_PATH", "stock_data.db")  # или полный путь: /mount/src/stocks/stock_data.db
+
+def get_conn(db_path: Optional[str] = None):
+    path = db_path or DB_PATH
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"DB not found: {path}")
+    return sqlite3.connect(path, check_same_thread=False)
+
+def get_counts(conn):
+    q = """
+    SELECT 
+      (SELECT COUNT(*) FROM companies) AS companies_cnt,
+      (SELECT COUNT(*) FROM daily_data) AS daily_data_cnt,
+      (SELECT COUNT(*) FROM metrics) AS metrics_cnt,
+      (SELECT COUNT(*) FROM technical_indicators) AS technical_indicators_cnt,
+      (SELECT COUNT(*) FROM company_parameters) AS company_parameters_cnt
+    ;
+    """
+    return pd.read_sql_query(q, conn).to_dict(orient='records')[0]
+
+def sample_rows(conn, table, limit=10):
+    return pd.read_sql_query(f"SELECT * FROM {table} LIMIT {limit}", conn)
+
+def company_id_type_info(conn, table='daily_data'):
+    df = pd.read_sql_query(f"SELECT company_id FROM {table} LIMIT 1000", conn)
+    # typeof in SQL:
+    cur = conn.cursor()
+    types = cur.execute(f"SELECT DISTINCT typeof(company_id) FROM {table}").fetchall()
+    types = [t[0] for t in types]
+    return {"distinct_sql_types": types, "sample_values": df['company_id'].head(20).tolist()}
+
+def find_unlinked_daily(conn, limit=100):
+    q = """
+    SELECT dd.rowid AS rowid, dd.company_id, dd.date
+    FROM daily_data dd
+    LEFT JOIN companies c ON dd.company_id = c.id
+    WHERE c.id IS NULL
+    LIMIT ?
+    """
+    return pd.read_sql_query(q, conn, params=(limit,))
+
+def find_unlinked_metrics(conn, limit=100):
+    q = """
+    SELECT m.rowid AS rowid, m.company_id, m.metric_type, m.date
+    FROM metrics m
+    LEFT JOIN companies c ON m.company_id = c.id
+    WHERE c.id IS NULL
+    LIMIT ?
+    """
+    return pd.read_sql_query(q, conn, params=(limit,))
+
+def candidate_contractcode_in_companyid(conn, limit=50):
+    # Есть ли company_id в daily_data, которые совпадают со значениями companies.contract_code?
+    q = """
+    SELECT DISTINCT dd.company_id
+    FROM daily_data dd
+    WHERE dd.company_id IN (SELECT contract_code FROM companies)
+    LIMIT ?
+    """
+    return pd.read_sql_query(q, conn, params=(limit,))
+
+def check_date_alignment(conn):
+    # Сравним уникальные форматы/примеры дат
+    dd_dates = pd.read_sql_query("SELECT DISTINCT date FROM daily_data ORDER BY date LIMIT 20", conn)['date'].tolist()
+    m_dates = pd.read_sql_query("SELECT DISTINCT date FROM metrics ORDER BY date LIMIT 20", conn)['date'].tolist()
+    return {"daily_data_examples": dd_dates, "metrics_examples": m_dates}
+
+def count_joined_pairs(conn):
+    q = """
+    SELECT 
+      (SELECT COUNT(*) FROM daily_data dd JOIN metrics m ON dd.company_id = m.company_id AND dd.date = m.date) AS exact_matches,
+      (SELECT COUNT(*) FROM daily_data) AS daily_rows,
+      (SELECT COUNT(*) FROM metrics) AS metrics_rows
+    ;
+    """
+    return pd.read_sql_query(q, conn).to_dict(orient='records')[0]
+
+def detailed_mismatch_examples(conn, limit=50):
+    # Возвращаем daily_data строки без метрик на ту же дату (и наоборот)
+    q1 = """
+    SELECT dd.rowid, dd.company_id, dd.date
+    FROM daily_data dd
+    LEFT JOIN metrics m ON dd.company_id = m.company_id AND dd.date = m.date
+    WHERE m.rowid IS NULL
+    LIMIT ?
+    """
+    q2 = """
+    SELECT m.rowid, m.company_id, m.metric_type, m.date
+    FROM metrics m
+    LEFT JOIN daily_data dd ON dd.company_id = m.company_id AND dd.date = m.date
+    WHERE dd.rowid IS NULL
+    LIMIT ?
+    """
+    a = pd.read_sql_query(q1, conn, params=(limit,))
+    b = pd.read_sql_query(q2, conn, params=(limit,))
+    return a, b
+
+def run_all_checks(db_path: Optional[str] = None):
+    conn = get_conn(db_path)
+    try:
+        print("DB path:", db_path or DB_PATH)
+        print("\n--- Counts ---")
+        pprint(get_counts(conn))
+
+        print("\n--- Sample companies ---")
+        print(sample_rows(conn, "companies", 5))
+
+        print("\n--- Sample daily_data ---")
+        print(sample_rows(conn, "daily_data", 5))
+
+        print("\n--- Sample metrics ---")
+        print(sample_rows(conn, "metrics", 5))
+
+        print("\n--- company_id types (daily_data) ---")
+        pprint(company_id_type_info(conn, 'daily_data'))
+
+        print("\n--- Unlinked daily_data rows (company_id not found in companies) ---")
+        df_unlinked_daily = find_unlinked_daily(conn, limit=200)
+        print(f"Found {len(df_unlinked_daily)} rows (showing up to 200):")
+        print(df_unlinked_daily.head(20))
+
+        print("\n--- Unlinked metrics rows (company_id not found in companies) ---")
+        df_unlinked_metrics = find_unlinked_metrics(conn, limit=200)
+        print(f"Found {len(df_unlinked_metrics)} rows (showing up to 200):")
+        print(df_unlinked_metrics.head(20))
+
+        print("\n--- Are there company_id values equal to companies.contract_code? (candidate for 'contract_code stored in company_id') ---")
+        cand = candidate_contractcode_in_companyid(conn, limit=200)
+        print(cand.head(30))
+        print("Count candidates:", len(cand))
+
+        print("\n--- Date examples (daily_data vs metrics) ---")
+        pprint(check_date_alignment(conn))
+
+        print("\n--- Join counts (exact date & company_id matches) ---")
+        pprint(count_joined_pairs(conn))
+
+        print("\n--- Examples: daily rows without metrics and metrics without daily rows ---")
+        a, b = detailed_mismatch_examples(conn, limit=200)
+        print("daily without metrics (sample):")
+        print(a.head(20))
+        print("metrics without daily (sample):")
+        print(b.head(20))
+
+        # Вернем словарь с данными для дальнейшей автоматизированной обработки
+        return {
+            "counts": get_counts(conn),
+            "unlinked_daily_count": len(df_unlinked_daily),
+            "unlinked_metrics_count": len(df_unlinked_metrics),
+            "candidate_companyid_contractcode": cand.head(50).to_dict('records'),
+            "exact_join_count": count_joined_pairs(conn)['exact_matches'],
+            "sample_unlinked_daily": df_unlinked_daily.head(20).to_dict('records'),
+            "sample_unlinked_metrics": df_unlinked_metrics.head(20).to_dict('records'),
+        }
+
+    finally:
+        conn.close()
+
 def main():
     # Работа с DB через модуль database
     conn = database.get_connection()
@@ -483,6 +641,9 @@ def main():
     import pathlib, os
     from database import DB_PATH
     db_health_check(conn)
+    res = run_all_checks()  # можно передать путь: run_all_checks("/mount/src/stocks/stock_data.db")
+    print("\n--- Summary ---")
+    print(res)
 
     st.sidebar.write("DB path:", DB_PATH)
     try:
