@@ -1,4 +1,4 @@
-# app.py
+# app.py (улучшенная версия с параметрами стратегии, эквити, экспортом и диагностикой)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -24,7 +24,16 @@ from stock_analyzer import StockAnalyzer
 from auto_update import auto_update_all_tickers, normalize_ticker, update_missing_market_data
 from visualization import plot_daily_analysis, plot_stock_analysis, plot_grafik_candle_days
 from indicators import get_calculated_data, clear_get_calculated_data
-from orders import create_order
+
+# — попытка подключить ATR-версию (если ты её добавил в indicators.py)
+try:
+    from indicators import vectorized_dynamic_profit_atr  # опционально
+    HAS_ATR_PROFIT = True
+except Exception:
+    HAS_ATR_PROFIT = False
+
+# — базовая функция перерасчёта прибыли (в твоём indicators.py уже есть)
+from indicators import vectorized_dynamic_profit
 
 # Настройка страницы
 st.set_page_config(page_title="Анализ акций", layout="wide")
@@ -74,14 +83,12 @@ def open_database_connection():
             try:
                 return getattr(database, name)()
             except TypeError:
-                # если функция ожидает аргументы — вызов без аргументов мог бы упасть, попробуем без
                 try:
                     return getattr(database, name)(None)
                 except Exception:
                     continue
             except Exception as e:
                 logger.exception("Ошибка при вызове database.%s: %s", name, e)
-    # если не удалось — попробуем прямой коннект по пути DB_PATH, если есть
     if hasattr(database, "DB_PATH"):
         path = getattr(database, "DB_PATH")
         try:
@@ -128,39 +135,70 @@ def db_health_check(conn):
             LIMIT 20;
         """))
 
-# --- Безопасное извлечение selected_rows из ответа AgGrid ---
+# --- Безопасное извлечение выбранной строки (AgGrid) ---
 def _extract_selected_rows(grid_response):
-    """
-    Попытки извлечь выбранные строки в нескольких форматах:
-      - dict (-> 'selected_rows' / 'data')
-      - объект с атрибутом .selected_rows или .data
-      - list
-    Возвращает либо DataFrame, либо list, либо dict, либо None.
-    """
     try:
-        # dict-like
         if isinstance(grid_response, dict):
             return grid_response.get("selected_rows", grid_response.get("data", None))
-
-        # объект с атрибутами
         if hasattr(grid_response, "selected_rows"):
             return getattr(grid_response, "selected_rows")
         if hasattr(grid_response, "data"):
             return getattr(grid_response, "data")
-
-        # list-like
         if isinstance(grid_response, list):
             return grid_response
-
     except Exception as e:
         logger.exception("Ошибка при извлечении selected_rows: %s", e)
     return None
 
-# --- Основная страница ---
+# --- ПАНЕЛЬ ДИАГНОСТИКИ ОКРУЖЕНИЯ ---
+def env_diagnostics_sidebar():
+    st.sidebar.markdown("### Диагностика окружения")
+    try:
+        import matplotlib  # noqa
+        st.sidebar.success("matplotlib ✅")
+    except Exception:
+        st.sidebar.warning("matplotlib ❌")
+    try:
+        import plotly  # noqa
+        st.sidebar.success("plotly ✅")
+    except Exception:
+        st.sidebar.warning("plotly ❌")
+    try:
+        import sklearn  # noqa
+        st.sidebar.success("scikit-learn ✅")
+    except Exception:
+        st.sidebar.warning("scikit-learn ❌")
+    try:
+        import tinkoff  # noqa
+        st.sidebar.info("tinkoff SDK обнаружен")
+    except Exception:
+        st.sidebar.info("tinkoff SDK нет — будет эмуляция")
+
+# --- ПАРАМЕТРЫ СТРАТЕГИИ (с пересчётом прибыли и эквити) ---
+def strategy_params_sidebar():
+    st.sidebar.markdown("### Параметры стратегии")
+    # Доступные всегда
+    max_hold = st.sidebar.slider("Макс. дней в сделке", 1, 20, 3, 1)
+    prefer_tp = st.sidebar.checkbox("При одновременном SL/TP — брать TP", True)
+
+    # Параметры ATR-версии — активны только если функция доступна
+    if HAS_ATR_PROFIT:
+        atr_mult_sl = st.sidebar.number_input("SL (в ATR)", 0.1, 5.0, 1.0, 0.1)
+        atr_mult_tp = st.sidebar.number_input("TP (в ATR)", 0.1, 10.0, 2.0, 0.1)
+    else:
+        st.sidebar.info("ATR-перерасчёт недоступен: используем базовую модель ±0.5%.\n"
+                        "Чтобы включить ATR-логику — добавь vectorized_dynamic_profit_atr в indicators.py.")
+        atr_mult_sl, atr_mult_tp = None, None
+
+    recalc_btn = st.sidebar.button("Пересчитать прибыль и эквити")
+    return max_hold, prefer_tp, atr_mult_sl, atr_mult_tp, recalc_btn
+
+# --- Главная страница ---
 def main_page(conn, analyzer, api_key):
+    env_diagnostics_sidebar()
     # Получаем данные с кэшированием
     df_all = get_calculated_data_cached(conn)
-    st.button("Очистить кэш", on_click=clear_get_calculated_data)
+    st.button("Очистить кэш индикаторов", on_click=clear_get_calculated_data)
 
     if df_all is None or df_all.empty:
         st.info("Данные не найдены или пусты.")
@@ -185,7 +223,7 @@ def main_page(conn, analyzer, api_key):
     new_adaptive_buy = col3.checkbox("New Adaptive Buy Signal", value=True)
     new_adaptive_sell = col4.checkbox("New Adaptive Sell Signal", value=True)
 
-    # Построение условия фильтрации через mask (без булевой неоднозначности)
+    # Построение условия фильтрации через mask
     mask = pd.Series(False, index=filtered_df.index)
     if adaptive_buy and 'Adaptive_Buy_Signal' in filtered_df.columns:
         mask |= (filtered_df['Adaptive_Buy_Signal'] == 1)
@@ -216,7 +254,8 @@ def main_page(conn, analyzer, api_key):
         gridOptions=gridOptions,
         data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
         update_mode=GridUpdateMode.SELECTION_CHANGED,
-        theme="alpine"
+        theme="alpine",
+        height=500,
     )
 
     # --- Извлечение выбранной строки (безопасно) ---
@@ -224,11 +263,9 @@ def main_page(conn, analyzer, api_key):
 
     selected = None
     if selected_rows_raw is not None:
-        # DataFrame
         if isinstance(selected_rows_raw, pd.DataFrame):
             if not selected_rows_raw.empty:
                 selected = selected_rows_raw.iloc[0].to_dict()
-        # list (list of dicts / list of Series)
         elif isinstance(selected_rows_raw, list):
             if len(selected_rows_raw) > 0:
                 first = selected_rows_raw[0]
@@ -241,11 +278,13 @@ def main_page(conn, analyzer, api_key):
                         selected = dict(first)
                     except Exception:
                         selected = None
-        # dict-like
         elif isinstance(selected_rows_raw, dict):
             selected = selected_rows_raw
 
-    # Если есть выбранная строка — показываем подробности и графики
+    # ПАРАМЕТРЫ СТРАТЕГИИ / ПЕРЕРАСЧЁТ
+    max_hold, prefer_tp, atr_mult_sl, atr_mult_tp, recalc_btn = strategy_params_sidebar()
+
+    # Плашка выбранной заявки
     if selected is not None:
         selected_ticker = selected.get("contract_code")
         st.sidebar.write(f"Выбран тикер: {selected_ticker}")
@@ -261,10 +300,10 @@ def main_page(conn, analyzer, api_key):
             filtered_df_full = data[data['contract_code'] == selected_ticker]
             filtered_df_1 = filtered_df_full[filtered_df_full["metric_type"] == "Изменение"]
             filtered_df_2 = filtered_df_full[filtered_df_full["metric_type"] == "Открытые позиции"]
-            col1, col2 = st.columns(2)
-            with col1:
+            colL, colR = st.columns(2)
+            with colL:
                 st.dataframe(filtered_df_1)
-            with col2:
+            with colR:
                 st.dataframe(filtered_df_2)
 
         left_col, right_col = st.columns(2)
@@ -277,29 +316,22 @@ def main_page(conn, analyzer, api_key):
             st.write(f"**ATR:** {selected.get('ATR', 'N/A')}")
             st.write(f"**Final_Buy_Signal:** {selected.get('Final_Buy_Signal', 'N/A')}")
 
-            # Определяем, какие сигналы сработали
             triggered_signals = []
             if selected.get('Signal') == 1:
                 triggered_signals.append("Базовый Buy")
             elif selected.get('Signal') == -1:
                 triggered_signals.append("Базовый Sell")
-
             if selected.get('Adaptive_Buy_Signal') == 1:
                 triggered_signals.append("Adaptive Buy")
             elif selected.get('Adaptive_Sell_Signal') == 1:
                 triggered_signals.append("Adaptive Sell")
-
             if selected.get('New_Adaptive_Buy_Signal') == 1:
                 triggered_signals.append("New Adaptive Buy")
             elif selected.get('New_Adaptive_Sell_Signal') == 1:
                 triggered_signals.append("New Adaptive Sell")
 
-            if triggered_signals:
-                st.write(f"**Сработавший сигнал:** {', '.join(triggered_signals)}")
-            else:
-                st.write("**Сработавший сигнал:** Нет")
+            st.write(f"**Сработавший сигнал:** {', '.join(triggered_signals) if triggered_signals else 'Нет'}")
 
-            # Отображение динамической информации для каждого типа сигнала, если они сработали
             if selected.get('Adaptive_Buy_Signal') == 1:
                 st.write(f"**Dynamic Profit (Adaptive Buy):** {selected.get('Dynamic_Profit_Adaptive_Buy', 'N/A')}")
                 st.write(f"**Exit Date (Adaptive Buy):** {selected.get('Exit_Date_Adaptive_Buy', 'N/A')}")
@@ -319,11 +351,71 @@ def main_page(conn, analyzer, api_key):
 
         with right_col:
             st.write("Параметры заявки (в разработке)")
-            # Здесь можно разместить интерфейс отправки заявки через create_order
+
     else:
         st.info("Пожалуйста, выберите заявку из таблицы.")
 
-    # Сводка сигналов
+    # === ПЕРЕРАСЧЁТ ПРИБЫЛИ + ЭКВИТИ / ЭКСПОРТ ===
+    st.markdown("---")
+    st.markdown("## Перерасчёт прибыли и кривая эквити")
+    profit_col_out = None
+
+    if recalc_btn:
+        # работаем на копии, чтобы не портить кэш
+        df_recalc = df_all.copy()
+
+        # Если есть ATR-версия, считаем по Final_Buy_Signal
+        if HAS_ATR_PROFIT and 'Final_Buy_Signal' in df_recalc.columns:
+            df_recalc = vectorized_dynamic_profit_atr(
+                df_recalc,
+                signal_col='Final_Buy_Signal',
+                profit_col='Profit_Final_Buy_ATR',
+                exit_date_col='Exit_Date_Final_Buy_ATR',
+                exit_price_col='Exit_Price_Final_Buy_ATR',
+                max_holding_days=max_hold,
+                atr_mult_sl=atr_mult_sl,
+                atr_mult_tp=atr_mult_tp,
+                prefer_tp=prefer_tp,
+                is_short=False
+            )
+            profit_col_out = 'Profit_Final_Buy_ATR'
+        else:
+            # fallback: базовая функция (±0.5% внутри indicators.vectorized_dynamic_profit)
+            # посчитаем для Final_Buy_Signal, если его нет — для Adaptive_Buy_Signal
+            signal_col = 'Final_Buy_Signal' if 'Final_Buy_Signal' in df_recalc.columns else 'Adaptive_Buy_Signal'
+            out_profit = 'Profit_Recalc_Base'
+            out_exit_d = 'Exit_Date_Recalc_Base'
+            out_exit_p = 'Exit_Price_Recalc_Base'
+            df_recalc = vectorized_dynamic_profit(
+                df_recalc,
+                signal_col=signal_col,
+                profit_col=out_profit,
+                exit_date_col=out_exit_d,
+                exit_price_col=out_exit_p,
+                max_holding_days=max_hold,
+                is_short=False
+            )
+            profit_col_out = out_profit
+            st.info("Пересчитано базовой моделью (±0.5%). Чтобы использовать ATR — добавь vectorized_dynamic_profit_atr в indicators.py.")
+
+        # Эквити-кривая
+        trades = df_recalc.loc[df_recalc.get('Final_Buy_Signal', df_recalc.get('Adaptive_Buy_Signal', 0)) == 1, [ 'date', profit_col_out ]].dropna()
+        if not trades.empty:
+            eq = trades[profit_col_out].cumsum().reset_index(drop=True)
+            st.line_chart(eq)
+            st.caption(f"Показана накопленная сумма процентов по сделкам (кол-во: {len(trades)})")
+        else:
+            st.warning("Нет сделок для построения эквити при выбранных параметрах.")
+
+        # Экспорт
+        st.download_button(
+            "Экспорт пересчитанных сигналов (CSV)",
+            df_recalc.to_csv(index=False).encode("utf-8-sig"),
+            file_name="signals_recalc.csv",
+            mime="text/csv"
+        )
+
+    # === Сводка сигналов ===
     df_signals = df_all[
         (df_all.get('Adaptive_Buy_Signal', 0) == 1) |
         (df_all.get('Adaptive_Sell_Signal', 0) == 1) |
@@ -331,7 +423,6 @@ def main_page(conn, analyzer, api_key):
         (df_all.get('New_Adaptive_Sell_Signal', 0) == 1)
     ].copy()
 
-    # безопасные .get при отсутствии колонок
     df_signals['Profit_Adaptive_Buy'] = np.where(
         df_signals.get('Adaptive_Buy_Signal', 0) == 1,
         df_signals.get('Dynamic_Profit_Adaptive_Buy', 0),
@@ -364,6 +455,7 @@ def main_page(conn, analyzer, api_key):
         Profit_New_Adaptive_Sell=('Profit_New_Adaptive_Sell', 'sum')
     ).reset_index()
 
+    st.markdown("## Сводка по сигналам (агрегировано по тикеру)")
     st.write(summary)
 
     # Агрегация по периодам (без ошибок при отсутствии столбца date)
@@ -415,6 +507,7 @@ def main_page(conn, analyzer, api_key):
 
 
 def update_data_page(conn, analyzer):
+    env_diagnostics_sidebar()
     st.header("Обновление данных")
     update_mode = st.sidebar.selectbox("Выберите режим обновления:", ["Загрузить CSV", "API price"])
     if update_mode == "Загрузить CSV":
@@ -465,7 +558,10 @@ def update_data_page(conn, analyzer):
                         if norm_ticker not in figi_mapping:
                             log_messages.append(f"FIGI для {ticker} не найден.")
                             continue
-                        figi = figi_mapping[norm_ticker]
+                        figi = figi_mapping[norm_ticker] if norm_ticker in figi_mapping else figi_mapping.get(ticker)
+                        if not figi:
+                            log_messages.append(f"FIGI для {ticker} не найден (после нормализации).")
+                            continue
                         stock_data = analyzer.get_stock_data(figi)
                         if stock_data is None or stock_data.empty:
                             log_messages.append(f"Нет рыночных данных для {ticker}.")
@@ -478,6 +574,7 @@ def update_data_page(conn, analyzer):
 
 
 def charts_page(conn):
+    env_diagnostics_sidebar()
     st.header("Графики")
     data = database.load_data_from_db(conn)
     data_daily = database.load_daily_data_from_db(conn)
@@ -549,7 +646,7 @@ def countPosition(conn):
 
 
 def main():
-    # Откроем соединение с БД (поддерживаем несколько имен функции в модуле database)
+    # Откроем соединение с БД
     try:
         conn = open_database_connection()
     except Exception as e:
@@ -572,7 +669,6 @@ def main():
         except Exception:
             st.sidebar.write("DB: не найден или ещё не создан")
     except Exception:
-        # если DB_PATH отсутствует — просто игнорируем
         pass
 
     # безопасное получение ключа
