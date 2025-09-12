@@ -3,6 +3,7 @@ import os
 import sqlite3
 import decimal
 import logging
+import pandas as pd
 
 sqlite3.register_adapter(decimal.Decimal, float)
 logger = logging.getLogger(__name__)
