@@ -311,7 +311,11 @@ def get_calculated_data(_conn):
         return pd.DataFrame()
 
     try:
+        if not results:
+            logger.warning("mergeMetrDaily вернул пустой results. Возвращаю пустой DataFrame вместо pd.concat().")
+            return pd.DataFrame()
         df_all = pd.concat(results, ignore_index=True)
+        
         return df_all.drop_duplicates()
     except Exception as e:
         st.error(f"Ошибка объединения результатов: {e}")
