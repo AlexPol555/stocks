@@ -1,12 +1,10 @@
-# database.py (вставить/заменить этот блок в начале файла)
+# database.py (заменить/вставить этим содержимым)
 import os
 import sqlite3
 import decimal
 import logging
 import pandas as pd
-from typing import Optional, List, Dict, Any
-
-
+from typing import Optional, Dict, Any
 
 sqlite3.register_adapter(decimal.Decimal, float)
 logger = logging.getLogger(__name__)
@@ -21,6 +19,8 @@ def get_connection(db_path: str = None):
     check_same_thread=False полезно для использования в Streamlit.
     """
     path = db_path or DB_PATH
+    # Убедимся, что директория существует (для безопасности)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     conn = sqlite3.connect(path, check_same_thread=False)
     return conn
 
@@ -119,8 +119,7 @@ def create_tables(conn: sqlite3.Connection):
         """)
     except Exception:
         # логируем не фатально
-        import logging
-        logging.getLogger(__name__).warning("Миграция contract_code из company_parameters не выполнена.")
+        logger.exception("Миграция contract_code из company_parameters не выполнена.")
 
     conn.commit()
 
@@ -138,6 +137,7 @@ def load_data_from_db(conn: sqlite3.Connection) -> pd.DataFrame:
         df = pd.read_sql_query(query, conn)
         return df.drop_duplicates()
     except Exception:
+        logger.exception("Ошибка в load_data_from_db")
         return pd.DataFrame()
 
 def load_daily_data_from_db(conn: sqlite3.Connection, start_date: Optional[str] = None, end_date: Optional[str] = None) -> pd.DataFrame:
@@ -167,6 +167,7 @@ def load_daily_data_from_db(conn: sqlite3.Connection, start_date: Optional[str] 
         df = pd.read_sql_query(query, conn)
         return df.drop_duplicates()
     except Exception:
+        logger.exception("Ошибка в load_daily_data_from_db")
         return pd.DataFrame()
 
 def update_technical_indicators(conn: sqlite3.Connection,
@@ -217,8 +218,7 @@ def update_technical_indicators(conn: sqlite3.Connection,
         conn.commit()
     except Exception:
         # не фатально — логируем и продолжаем
-        import logging
-        logging.getLogger(__name__).exception("Ошибка при обновлении technical_indicators")
+        logger.exception("Ошибка при обновлении technical_indicators")
 
 def mergeMetrDaily(conn: sqlite3.Connection) -> pd.DataFrame:
     """
@@ -291,6 +291,5 @@ def mergeMetrDaily(conn: sqlite3.Connection) -> pd.DataFrame:
         df = pd.DataFrame(data, columns=columns)
         return df.drop_duplicates()
     except Exception:
-        import logging
-        logging.getLogger(__name__).exception("Ошибка при выполнении mergeMetrDaily")
+        logger.exception("Ошибка при выполнении mergeMetrDaily")
         return pd.DataFrame()
