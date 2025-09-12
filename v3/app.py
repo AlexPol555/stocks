@@ -643,7 +643,7 @@ def main():
     database.create_tables(conn)
     import pathlib, os
     from database import DB_PATH
-    db_health_check(conn)
+    # db_health_check(conn)
     res = run_all_checks()  # можно передать путь: run_all_checks("/mount/src/stocks/stock_data.db")
     print("\n--- Summary ---")
     print(res)
