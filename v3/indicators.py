@@ -1,16 +1,14 @@
+# indicators.py — замените начало файла этим блоком
 import numpy as np
 import pandas as pd
 import streamlit as st
 from database import mergeMetrDaily
-# ВНИМАНИЕ: НЕ импортируем sklearn здесь напрямую — используем guarded import ниже
-
-from sklearn.model_selection import GridSearchCV, train_test_split  # <-- если эти тоже зависят от sklearn, их нужно тоже защищать; но оставлю их, ниже поясню
 from itertools import product
 import logging
 
 logger = logging.getLogger(__name__)
 
-# Попытка импортировать scikit-learn (guarded)
+# Guarded imports for scikit-learn — чтобы приложение не падало, если sklearn отсутствует
 SKLEARN_AVAILABLE = True
 try:
     from sklearn.ensemble import RandomForestClassifier
@@ -32,9 +30,8 @@ except Exception as _e:
             except Exception:
                 return [0] * len(X)
 
-    # Если тебе нужны заглушки для GridSearchCV / train_test_split — можно добавить их здесь.
+    # Простые заглушки для train_test_split и GridSearchCV
     def train_test_split(X, y, *args, **kwargs):
-        # Возвращаем X_train, X_test, y_train, y_test как простую разбивку 80/20
         n = len(X)
         split = max(1, int(n * 0.8))
         return X[:split], X[split:], y[:split], y[split:]
@@ -45,17 +42,17 @@ except Exception as _e:
             self.param_grid = param_grid
             self.best_estimator_ = estimator
         def fit(self, X, y):
-            # простая подгонка без перебора
             self.estimator.fit(X, y)
             self.best_estimator_ = self.estimator
             return self
 
-# UI-предупреждение, если sklearn отсутствует
+# Предупреждение в UI, если sklearn нет
 try:
     if not SKLEARN_AVAILABLE:
-        st.warning("scikit-learn не установлен в окружении. Модуль анализа работает в упрощённом режиме.")
+        st.warning("scikit-learn не установлен. Анализ работает в упрощённом режиме.")
 except Exception:
     pass
+
 
 # --- Дальше идут все функции как были (без изменений логики) ---
 def calculate_basic_indicators(data):
