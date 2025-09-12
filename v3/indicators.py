@@ -1,4 +1,4 @@
-# indicators.py — замените начало файла этим блоком
+# indicators.py — расширенная версия с ATR-выходами и тренд-фильтром
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -8,7 +8,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Guarded imports for scikit-learn — чтобы приложение не падало, если sklearn отсутствует
+# Guarded imports for scikit-learn
 SKLEARN_AVAILABLE = True
 try:
     from sklearn.ensemble import RandomForestClassifier
@@ -17,7 +17,6 @@ except Exception as _e:
     SKLEARN_AVAILABLE = False
     logger.warning("scikit-learn не доступна: %s", _e)
 
-    # Заглушка: минимальный интерфейс для RandomForestClassifier
     class RandomForestClassifier:
         def __init__(self, *args, **kwargs):
             logger.warning("Используется заглушка RandomForestClassifier (sklearn отсутствует).")
@@ -30,7 +29,6 @@ except Exception as _e:
             except Exception:
                 return [0] * len(X)
 
-    # Простые заглушки для train_test_split и GridSearchCV
     def train_test_split(X, y, *args, **kwargs):
         n = len(X)
         split = max(1, int(n * 0.8))
@@ -46,7 +44,6 @@ except Exception as _e:
             self.best_estimator_ = self.estimator
             return self
 
-# Предупреждение в UI, если sklearn нет
 try:
     if not SKLEARN_AVAILABLE:
         st.warning("scikit-learn не установлен. Анализ работает в упрощённом режиме.")
@@ -54,17 +51,14 @@ except Exception:
     pass
 
 
-# --- Дальше идут все функции как были (без изменений логики) ---
+# --- Базовые индикаторы и сигналы ---
 def calculate_basic_indicators(data):
     epsilon = 1e-9
-    # Скользящие средние
     data['SMA_50'] = data['close'].rolling(window=50).mean()
     data['SMA_200'] = data['close'].rolling(window=200).mean()
-    # EMA
     data['EMA_50'] = data['close'].ewm(span=50, adjust=False).mean()
     data['EMA_200'] = data['close'].ewm(span=200, adjust=False).mean()
-    
-    # RSI
+
     delta = data['close'].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -72,14 +66,13 @@ def calculate_basic_indicators(data):
     avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
     RS = avg_gain / (avg_loss + epsilon)
     data['RSI'] = 100 - (100 / (1 + RS))
-    
-    # MACD и сигнальная линия
+
     data['EMA_12'] = data['close'].ewm(span=12, adjust=False).mean()
     data['EMA_26'] = data['close'].ewm(span=26, adjust=False).mean()
     data['MACD'] = data['EMA_12'] - data['EMA_26']
     data['Signal_Line'] = data['MACD'].ewm(span=9, adjust=False).mean()
-    
     return data
+
 
 def generate_trading_signals(data):
     data['Buy_Signal'] = (
@@ -88,41 +81,50 @@ def generate_trading_signals(data):
         (data['RSI'] < 35) &
         (data['MACD'] > data['Signal_Line'])
     ).astype(int)
-    
+
     data['Sell_Signal'] = (
         (data['SMA_50'] < data['SMA_200']) &
         (data['EMA_50'] < data['EMA_200']) &
         (data['RSI'] > 65) &
         (data['MACD'] < data['Signal_Line'])
     ).astype(int)
-    
+
     data['Signal'] = 0
     data.loc[data['Buy_Signal'] == 1, 'Signal'] = 1
     data.loc[data['Sell_Signal'] == 1, 'Signal'] = -1
     return data
 
-def calculate_additional_indicators(data, atr_period=24):
+
+def calculate_additional_indicators(data, atr_period=24, atr_method='ema'):
+    """
+    ATR с выбором метода усреднения: 'ema' (по умолчанию) или 'sma'.
+    """
     epsilon = 1e-9
     window_bb = 35
     data['BB_Middle'] = data['close'].rolling(window=window_bb).mean()
     data['BB_Std'] = data['close'].rolling(window=window_bb).std()
     data['BB_Upper'] = data['BB_Middle'] + 2 * data['BB_Std']
     data['BB_Lower'] = data['BB_Middle'] - 2 * data['BB_Std']
-    
+
     window_so = 30
     data['Lowest_Low'] = data['low'].rolling(window=window_so).min()
     data['Highest_High'] = data['high'].rolling(window=window_so).max()
     data['%K'] = 100 * (data['close'] - data['Lowest_Low']) / (data['Highest_High'] - data['Lowest_Low'] + epsilon)
     data['%D'] = data['%K'].rolling(window=3).mean()
-    
+
+    # ATR
     data['Prev_Close'] = data['close'].shift(1)
-    data['High_Low'] = data['high'] - data['low']
-    data['High_PrevClose'] = (data['high'] - data['Prev_Close']).abs()
-    data['Low_PrevClose'] = (data['low'] - data['Prev_Close']).abs()
-    data['TR'] = data[['High_Low', 'High_PrevClose', 'Low_PrevClose']].max(axis=1)
-    data['ATR'] = data['TR'].rolling(window=atr_period, min_periods=1).mean()
-    
+    high_low = data['high'] - data['low']
+    high_prev = (data['high'] - data['Prev_Close']).abs()
+    low_prev  = (data['low'] - data['Prev_Close']).abs()
+    data['TR'] = pd.concat([high_low, high_prev, low_prev], axis=1).max(axis=1)
+    if atr_method == 'ema':
+        data['ATR'] = data['TR'].ewm(span=atr_period, adjust=False).mean()
+    else:
+        data['ATR'] = data['TR'].rolling(window=atr_period, min_periods=1).mean()
+
     return data
+
 
 def generate_adaptive_signals(data, use_adaptive=True):
     if use_adaptive:
@@ -131,7 +133,7 @@ def generate_adaptive_signals(data, use_adaptive=True):
         data['RSI_std'] = data['RSI'].rolling(window=window, min_periods=1).std()
         adaptive_buy_threshold = data['RSI_mean'] - data['RSI_std']
         adaptive_sell_threshold = data['RSI_mean'] + data['RSI_std']
-        
+
         data['Adaptive_Buy_Signal'] = (
             (data['SMA_50'] > data['SMA_200']) &
             (data['EMA_50'] > data['EMA_200']) &
@@ -145,28 +147,28 @@ def generate_adaptive_signals(data, use_adaptive=True):
             (data['RSI'] > adaptive_sell_threshold) &
             (data['MACD'] < data['Signal_Line'])
         ).astype(int)
-    
     return data
+
 
 def generate_new_adaptive_signals(data):
     data['ATR_MA'] = data['ATR'].rolling(window=24, min_periods=1).mean()
-    
+
     data['New_Adaptive_Buy_Signal'] = (
         (data['close'] < data['BB_Lower']) &
         (data['%K'] < 15) &
         (data['ATR'] < data['ATR_MA'])
     ).astype(int)
-    
+
     sell_condition = (
         (data['close'] > data['BB_Upper']) &
         (data['%K'] > 85) &
         (data['ATR'] < data['ATR_MA'])
     )
     data['New_Adaptive_Sell_Signal'] = sell_condition.astype(int)
-    
+
     data.drop(columns=['ATR_MA'], inplace=True)
-    
     return data
+
 
 def calculate_additional_filters(data):
     data['Volume_Filter'] = data['volume'] > data['volume'].rolling(window=20).mean()
@@ -175,34 +177,56 @@ def calculate_additional_filters(data):
     data['Volatility_Filter'] = (data['ATR'] > lower_bound) & (data['ATR'] < upper_bound)
     return data
 
+
 def generate_final_adaptive_signals(data):
+    """
+    Тренд-фильтр: лонги только если close >= EMA_200, шорты — если close <= EMA_200.
+    Добавлен Final_Sell_Signal.
+    """
     data['Combined_Buy_Signal'] = (data['Adaptive_Buy_Signal'] | data['New_Adaptive_Buy_Signal']).astype(int)
     data = calculate_additional_filters(data)
+
+    long_trend_ok  = data['close'] >= data['EMA_200']
+    short_trend_ok = data['close'] <= data['EMA_200']
+
     data['Final_Buy_Signal'] = (
         data['Combined_Buy_Signal'] &
+        long_trend_ok &
+        data['Volume_Filter'] &
+        data['Volatility_Filter']
+    ).astype(int)
+
+    data['Final_Sell_Signal'] = (
+        (data['Adaptive_Sell_Signal'] | data['New_Adaptive_Sell_Signal']).astype(int) &
+        short_trend_ok &
         data['Volume_Filter'] &
         data['Volatility_Filter']
     ).astype(int)
     return data
 
-def vectorized_dynamic_profit(data, signal_col, profit_col, exit_date_col, exit_price_col, 
-                              max_holding_days=3, is_short=False):
 
+def vectorized_dynamic_profit(
+    data, signal_col, profit_col, exit_date_col, exit_price_col,
+    max_holding_days=3, is_short=False
+):
+    """
+    Базовая версия выхода (±0.5% от цены входа).
+    """
     close = data['close'].values
     n = len(data)
-    
+
     profits = np.full(n, np.nan, dtype=float)
     exit_dates = np.array([None] * n)
     exit_prices = np.full(n, np.nan, dtype=float)
-    
+
     for i in np.where(data[signal_col] != 0)[0]:
         entry_price = close[i]
         exit_price = None
         exit_date = None
-        
+
         start = i + 1
         end = min(i + max_holding_days + 1, n)
-        
+
         if start >= n:
             exit_index = min(i + max_holding_days, n - 1)
             if not is_short:
@@ -212,11 +236,9 @@ def vectorized_dynamic_profit(data, signal_col, profit_col, exit_date_col, exit_
             exit_date = data.iloc[exit_index].get('date', None)
         else:
             period_data = data.iloc[start:end]
-            
             if not is_short:
                 condition = period_data['high'] >= entry_price * (1 + 0.005)
                 valid_days = period_data[condition]
-                
                 if not valid_days.empty:
                     exit_price = valid_days['high'].max()
                     exit_date = valid_days.loc[valid_days['high'].idxmax()]['date']
@@ -226,14 +248,13 @@ def vectorized_dynamic_profit(data, signal_col, profit_col, exit_date_col, exit_
             else:
                 condition = period_data['low'] <= entry_price * (1 - 0.005)
                 valid_days = period_data[condition]
-                
                 if not valid_days.empty:
                     exit_price = valid_days['low'].min()
                     exit_date = valid_days.loc[valid_days['low'].idxmin()]['date']
                 else:
                     exit_price = entry_price * (1 + 0.005)
                     exit_date = period_data.iloc[-1].get('date', None)
-        
+
         if exit_price is not None:
             if not is_short:
                 profit = (exit_price - entry_price) / entry_price * 100
@@ -246,64 +267,132 @@ def vectorized_dynamic_profit(data, signal_col, profit_col, exit_date_col, exit_
     data[profit_col] = profits
     data[exit_date_col] = exit_dates
     data[exit_price_col] = exit_prices
-    
     return data
+
+
+def vectorized_dynamic_profit_atr(
+    data, signal_col, profit_col, exit_date_col, exit_price_col,
+    max_holding_days=3, atr_mult_sl=1.0, atr_mult_tp=2.0, prefer_tp=True, is_short=False
+):
+    """
+    Выход по ATR. Если в день срабатывают и SL, и TP — поведение задаёт prefer_tp.
+    """
+    close = data['close'].values
+    high  = data['high'].values
+    low   = data['low'].values
+    atr   = data['ATR'].values if 'ATR' in data.columns else np.full(len(data), np.nan)
+
+    n = len(data)
+    profits = np.full(n, np.nan, float)
+    exit_dates = np.array([None]*n, dtype=object)
+    exit_prices = np.full(n, np.nan, float)
+
+    idxs = np.where(data[signal_col].values != 0)[0]
+    for i in idxs:
+        entry = close[i]
+        a = atr[i]
+        if np.isnan(a) or a <= 0:
+            continue
+
+        if not is_short:
+            sl = entry - atr_mult_sl*a
+            tp = entry + atr_mult_tp*a
+        else:
+            sl = entry + atr_mult_sl*a
+            tp = entry - atr_mult_tp*a
+
+        hit_price = None
+        hit_date  = None
+        end = min(i + max_holding_days, n-1)
+        for j in range(i+1, end+1):
+            h, l = high[j], low[j]
+            hit_tp = (h >= tp) if not is_short else (l <= tp)
+            hit_sl = (l <= sl) if not is_short else (h >= sl)
+
+            if hit_tp and hit_sl:
+                hp = tp if prefer_tp else sl
+                hit_price, hit_date = hp, data.iloc[j]['date']
+                break
+            elif hit_tp:
+                hit_price, hit_date = tp, data.iloc[j]['date']
+                break
+            elif hit_sl:
+                hit_price, hit_date = sl, data.iloc[j]['date']
+                break
+
+        if hit_price is None:
+            hit_idx = end
+            hit_price = close[hit_idx]
+            hit_date  = data.iloc[hit_idx]['date']
+
+        pr = ((hit_price - entry)/entry*100.0) if not is_short else ((entry - hit_price)/entry*100.0)
+        profits[i] = pr
+        exit_prices[i] = hit_price
+        exit_dates[i] = hit_date
+
+    data[profit_col] = profits
+    data[exit_date_col] = exit_dates
+    data[exit_price_col] = exit_prices
+    return data
+
 
 def calculate_technical_indicators(data):
     data = data.copy()
     data = calculate_basic_indicators(data)
     data = generate_trading_signals(data)
-    data = calculate_additional_indicators(data)
+    # по умолчанию ATR — EMA
+    data = calculate_additional_indicators(data, atr_period=24, atr_method='ema')
     data = generate_adaptive_signals(data, use_adaptive=True)
     data = generate_new_adaptive_signals(data)
-    
+
     if 'ATR' not in data.columns:
         data = calculate_additional_indicators(data)
-    
+
     data = generate_final_adaptive_signals(data)
-    data = vectorized_dynamic_profit(data, 'Signal', 
+
+    # Базовые профиты (совместимость со старым UI)
+    data = vectorized_dynamic_profit(data, 'Signal',
                                      'Dynamic_Profit_Base', 'Exit_Date_Base', 'Exit_Price_Base')
-    data = vectorized_dynamic_profit(data, 'Adaptive_Buy_Signal', 
+    data = vectorized_dynamic_profit(data, 'Adaptive_Buy_Signal',
                                      'Dynamic_Profit_Adaptive_Buy', 'Exit_Date_Adaptive_Buy', 'Exit_Price_Adaptive_Buy')
-    data = vectorized_dynamic_profit(data, 'Adaptive_Sell_Signal', 
+    data = vectorized_dynamic_profit(data, 'Adaptive_Sell_Signal',
                                      'Dynamic_Profit_Adaptive_Sell', 'Exit_Date_Adaptive_Sell', 'Exit_Price_Adaptive_Sell',
                                      is_short=True)
-    data = vectorized_dynamic_profit(data, 'New_Adaptive_Buy_Signal', 
+    data = vectorized_dynamic_profit(data, 'New_Adaptive_Buy_Signal',
                                      'Dynamic_Profit_New_Adaptive_Buy', 'Exit_Date_New_Adaptive_Buy', 'Exit_Price_New_Adaptive_Buy')
-    data = vectorized_dynamic_profit(data, 'New_Adaptive_Sell_Signal', 
+    data = vectorized_dynamic_profit(data, 'New_Adaptive_Sell_Signal',
                                      'Dynamic_Profit_New_Adaptive_Sell', 'Exit_Date_New_Adaptive_Sell', 'Exit_Price_New_Adaptive_Sell',
                                      is_short=True)
-    data = vectorized_dynamic_profit(data, 'Final_Buy_Signal', 
+    data = vectorized_dynamic_profit(data, 'Final_Buy_Signal',
                                      'Dynamic_Profit_Final_Buy', 'Exit_Date_Final_Buy', 'Exit_Price_Final_Buy')
+    # Новое: профит для Final_Sell_Signal (шорт)
+    data = vectorized_dynamic_profit(data, 'Final_Sell_Signal',
+                                     'Dynamic_Profit_Final_Sell', 'Exit_Date_Final_Sell', 'Exit_Price_Final_Sell',
+                                     is_short=True)
     return data
+
 
 @st.cache_data(show_spinner=True)
 def get_calculated_data(_conn):
     """
-    Возвращает объединённый DataFrame с рассчитанными индикаторами для каждого контракта.
-    Защищено от пустой БД — в этом случае возвращается пустой DataFrame.
+    Объединённый DataFrame с индикаторами для каждого контракта.
     """
-    import database  # ленивый импорт, чтобы избежать circular imports
+    import database
     try:
         mergeData = database.mergeMetrDaily(_conn)
     except Exception as e:
         st.warning(f"Ошибка при вызове mergeMetrDaily: {e}")
         return pd.DataFrame()
 
-    # Диагностика: нет строк -> сообщаем и возвращаем пустой DF
     if mergeData is None or mergeData.empty:
         st.warning("Нет данных: mergeMetrDaily вернул пустой DataFrame. Проверьте таблицы daily_data и metrics в БД.")
-        # для удобства можно вернуть заранее подготовленные колонки, если требуется
         return pd.DataFrame()
 
     results = []
-    # Группируем по контракту и считаем индикаторы для каждой группы
     for contract, group in mergeData.groupby('contract_code'):
         try:
-            # предполагается, что calculate_technical_indicators возвращает DataFrame
             results.append(calculate_technical_indicators(group.copy()))
         except Exception as e:
-            # локальный лог — не прерываем весь процесс из-за одной неудачной группы
             st.warning(f"Ошибка обработки контракта {contract}: {e}")
 
     if not results:
@@ -311,15 +400,12 @@ def get_calculated_data(_conn):
         return pd.DataFrame()
 
     try:
-        if not results:
-            logger.warning("mergeMetrDaily вернул пустой results. Возвращаю пустой DataFrame вместо pd.concat().")
-            return pd.DataFrame()
         df_all = pd.concat(results, ignore_index=True)
-        
         return df_all.drop_duplicates()
     except Exception as e:
         st.error(f"Ошибка объединения результатов: {e}")
         return pd.DataFrame()
+
 
 def clear_get_calculated_data():
     get_calculated_data.clear()
