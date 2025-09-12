@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 import pyperclip
 
+import matplotlib.pyplot as plt
+
 # Импорт необходимых функций из ваших модулей
 from database import get_connection, create_tables, load_data_from_db, load_daily_data_from_db, mergeMetrDaily
 from populate_database import bulk_populate_database_from_csv, incremental_populate_database_from_csv
@@ -404,6 +406,22 @@ def charts_page(conn):
         st.error("Нет данных для анализа. Сначала обновите данные.")
     else:
         view_option = st.sidebar.selectbox("Выберите тип графика:", ["График по дате", "График по тикеру"])
+        daily_sums = data.groupby('date')[['value1', 'value2', 'value3', 'value4']].sum()
+        st.dataframe(daily_sums)
+        st.subheader("График сумм по дням")
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        for column in ['value1', 'value2', 'value3', 'value4']:
+            ax.plot(daily_sums.index, daily_sums[column], marker='o', label=column)
+
+        ax.set_title("Суммы по дням для value1 - value4")
+        ax.set_xlabel("Дата")
+        ax.set_ylabel("Сумма")
+        ax.legend()
+        ax.grid(True)
+
+        # Вывод графика в Streamlit
+        st.pyplot(fig)
         if view_option == "График по дате":
             unique_dates = sorted(data["date"].unique(), reverse=True)
             selected_date = st.sidebar.selectbox("Выберите дату", unique_dates)
