@@ -8,4 +8,4 @@ scikit-learn
 streamlit-aggrid
 sqlalchemy
 psycopg2-binary
-tinkoff-invest
+tinkoff-investments
