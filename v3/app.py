@@ -63,6 +63,43 @@ def get_calculated_data_cached(_conn):
     data = get_calculated_data(_conn)
     return data
 
+def db_health_check(conn):
+    with conn:
+        def q(sql, params=()):
+            try:
+                return pd.read_sql_query(sql, conn, params=params)
+            except Exception as e:
+                return f"SQL error: {e}"
+
+        st.subheader("Таблицы в базе")
+        tables = q("SELECT name FROM sqlite_master WHERE type='table';")
+        st.write(tables)
+
+        st.subheader("Counts")
+        for t in ['companies','daily_data','metrics','company_parameters']:
+            try:
+                cnt = pd.read_sql_query(f"SELECT COUNT(*) AS cnt FROM {t};", conn).iloc[0]['cnt']
+            except Exception:
+                cnt = "no table"
+            st.write(f"{t}: {cnt}")
+
+        st.subheader("Sample companies")
+        st.write(q("SELECT * FROM companies LIMIT 10;"))
+
+        st.subheader("Sample daily_data")
+        st.write(q("SELECT * FROM daily_data LIMIT 10;"))
+
+        st.subheader("Sample metrics")
+        st.write(q("SELECT * FROM metrics LIMIT 10;"))
+
+        st.subheader("Join sample (daily_data <-> metrics)")
+        st.write(q("""
+            SELECT dd.company_id, dd.date, m.metric_type
+            FROM daily_data dd
+            JOIN metrics m ON dd.company_id = m.company_id AND dd.date = m.date
+            LIMIT 20;
+        """))
+
 def main_page(conn, analyzer, api_key):
     # Получаем данные с кэшированием
     df_all = get_calculated_data_cached(conn)
@@ -445,6 +482,7 @@ def main():
     database.create_tables(conn)
     import pathlib, os
     from database import DB_PATH
+    db_health_check(conn)
 
     st.sidebar.write("DB path:", DB_PATH)
     try:
