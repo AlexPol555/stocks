@@ -5,7 +5,37 @@ from database import mergeMetrDaily
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import GridSearchCV, train_test_split
 from itertools import product
+import streamlit as st
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Попытка импортировать scikit-learn
+SKLEARN_AVAILABLE = True
+try:
+    from sklearn.ensemble import RandomForestClassifier
+except Exception as _e:
+    SKLEARN_AVAILABLE = False
+    logger.warning("scikit-learn не доступна: %s", _e)
+
+    # Заглушка: минимальный интерфейс для RandomForestClassifier
+    class RandomForestClassifier:
+        def __init__(self, *args, **kwargs):
+            logger.warning("Используется заглушка RandomForestClassifier (sklearn отсутствует).")
+        def fit(self, X, y):
+            return self
+        def predict(self, X):
+            # возвращаем массив нулей длины X (предсказание 'нет сигнала')
+            try:
+                import numpy as _np
+                return _np.zeros(len(X), dtype=int)
+            except Exception:
+                return [0] * len(X)
+
+if not SKLEARN_AVAILABLE:
+    st.warning("scikit-learn не установлен в окружении. Модуль анализа работает в упрощённом режиме.")
+    
 def calculate_basic_indicators(data):
     epsilon = 1e-9
     # Скользящие средние
