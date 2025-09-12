@@ -2,7 +2,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import pyperclip
+# import pyperclip
 
 import matplotlib.pyplot as plt
 
