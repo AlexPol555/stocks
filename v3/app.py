@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 # import pyperclip
 
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 
 # Импорт необходимых функций из ваших модулей
 from database import get_connection, create_tables, load_data_from_db, load_daily_data_from_db, mergeMetrDaily
