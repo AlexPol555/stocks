@@ -663,7 +663,7 @@ def main():
     # Показ информации о БД в sidebar
     try:
         from database import DB_PATH
-        st.sidebar.write("DB path:", DB_PATH)
+        # st.sidebar.write("DB path:", DB_PATH)
         try:
             st.sidebar.write("DB size (bytes):", os.path.getsize(DB_PATH))
         except Exception:
