@@ -444,9 +444,10 @@ def main():
     conn = database.get_connection()
     database.create_tables(conn)
 
-    api_key = st.secrets.get("TINKOFF_API_KEY") or os.getenv("TINKOFF_API_KEY")
+    # безопасное получение ключа
+    api_key = st.secrets.get("TINKOFF_API_KEY") or st.secrets.get("tinkoff", {}).get("api_key") or os.getenv("TINKOFF_API_KEY")
     if not api_key:
-        st.warning("TINKOFF API key not found — Tinkoff calls will be disabled. Set st.secrets['TINKOFF_API_KEY'] or env DISABLE_TINKOFF.")
+        st.warning("TINKOFF API key not found — Tinkoff calls will be disabled. Set st.secrets['TINKOFF_API_KEY'] or env TINKOFF_API_KEY.")
     analyzer = StockAnalyzer(api_key)
 
     st.sidebar.header("Навигация")
