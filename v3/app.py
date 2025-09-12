@@ -1,13 +1,14 @@
-# app.py (улучшенная версия с параметрами стратегии, эквити, экспортом и диагностикой)
+
+# app_with_scheduler.py — Streamlit app with daily scheduler (00:00) and manual API update
 import streamlit as st
 import pandas as pd
 import numpy as np
 import database
 import logging
 import os
-from typing import Optional
-from pprint import pprint
 import sqlite3
+
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -18,22 +19,16 @@ except Exception as _e:
     plt = None
     logger.warning("matplotlib не найден: %s", _e)
 
-# Импорт необходимых функций из ваших модулей
+# Импорт функций из модулей проекта
 from populate_database import bulk_populate_database_from_csv, incremental_populate_database_from_csv
 from stock_analyzer import StockAnalyzer
 from auto_update import auto_update_all_tickers, normalize_ticker, update_missing_market_data
 from visualization import plot_daily_analysis, plot_stock_analysis, plot_grafik_candle_days
 from indicators import get_calculated_data, clear_get_calculated_data
+from orders import create_order
 
-# — попытка подключить ATR-версию (если ты её добавил в indicators.py)
-try:
-    from indicators import vectorized_dynamic_profit_atr  # опционально
-    HAS_ATR_PROFIT = True
-except Exception:
-    HAS_ATR_PROFIT = False
-
-# — базовая функция перерасчёта прибыли (в твоём indicators.py уже есть)
-from indicators import vectorized_dynamic_profit
+# Планировщик
+from scheduler import start_daily_midnight
 
 # Настройка страницы
 st.set_page_config(page_title="Анализ акций", layout="wide")
@@ -135,7 +130,7 @@ def db_health_check(conn):
             LIMIT 20;
         """))
 
-# --- Безопасное извлечение выбранной строки (AgGrid) ---
+# --- Безопасное извлечение selected_rows из ответа AgGrid ---
 def _extract_selected_rows(grid_response):
     try:
         if isinstance(grid_response, dict):
@@ -150,55 +145,43 @@ def _extract_selected_rows(grid_response):
         logger.exception("Ошибка при извлечении selected_rows: %s", e)
     return None
 
-# --- ПАНЕЛЬ ДИАГНОСТИКИ ОКРУЖЕНИЯ ---
-def env_diagnostics_sidebar():
-    st.sidebar.markdown("### Диагностика окружения")
-    try:
-        import matplotlib  # noqa
-        st.sidebar.success("matplotlib ✅")
-    except Exception:
-        st.sidebar.warning("matplotlib ❌")
-    try:
-        import plotly  # noqa
-        st.sidebar.success("plotly ✅")
-    except Exception:
-        st.sidebar.warning("plotly ❌")
-    try:
-        import sklearn  # noqa
-        st.sidebar.success("scikit-learn ✅")
-    except Exception:
-        st.sidebar.warning("scikit-learn ❌")
-    try:
-        import tinkoff  # noqa
-        st.sidebar.info("tinkoff SDK обнаружен")
-    except Exception:
-        st.sidebar.info("tinkoff SDK нет — будет эмуляция")
+# ====== API UPDATE JOB (ручной и по расписанию) ======
+def _read_api_key():
+    return st.secrets.get("TINKOFF_API_KEY") or st.secrets.get("tinkoff", {}).get("api_key") or os.getenv("TINKOFF_API_KEY")
 
-# --- ПАРАМЕТРЫ СТРАТЕГИИ (с пересчётом прибыли и эквити) ---
-def strategy_params_sidebar():
-    st.sidebar.markdown("### Параметры стратегии")
-    # Доступные всегда
-    max_hold = st.sidebar.slider("Макс. дней в сделке", 1, 20, 3, 1)
-    prefer_tp = st.sidebar.checkbox("При одновременном SL/TP — брать TP", True)
+def run_api_update_job(full_update=True):
+    """
+    Отдельная функция: открывает коннект, создаёт analyzer и запускает обновление.
+    Вызывается как по кнопке, так и планировщиком в 00:00.
+    Возвращает список логов.
+    """
+    try:
+        job_conn = open_database_connection()
+        job_analyzer = StockAnalyzer(_read_api_key(), db_conn=job_conn)
+        logs = auto_update_all_tickers(job_analyzer, job_conn, full_update=full_update)
+        job_conn.close()
+        return logs
+    except Exception as e:
+        return [f"Ошибка в run_api_update_job: {e}"]
 
-    # Параметры ATR-версии — активны только если функция доступна
-    if HAS_ATR_PROFIT:
-        atr_mult_sl = st.sidebar.number_input("SL (в ATR)", 0.1, 5.0, 1.0, 0.1)
-        atr_mult_tp = st.sidebar.number_input("TP (в ATR)", 0.1, 10.0, 2.0, 0.1)
-    else:
-        st.sidebar.info("ATR-перерасчёт недоступен: используем базовую модель ±0.5%.\n"
-                        "Чтобы включить ATR-логику — добавь vectorized_dynamic_profit_atr в indicators.py.")
-        atr_mult_sl, atr_mult_tp = None, None
+@st.cache_resource
+def init_daily_scheduler():
+    """
+    Создаёт единый фоновый поток, который вызывает инкрементальное обновление каждый день в 00:00 (Europe/Stockholm).
+    Возвращает dict с {thread, stop_event, get_state}.
+    """
+    def _job():
+        # В фоне не используем Streamlit API; только логику обновления
+        _ = run_api_update_job(full_update=False)
 
-    recalc_btn = st.sidebar.button("Пересчитать прибыль и эквити")
-    return max_hold, prefer_tp, atr_mult_sl, atr_mult_tp, recalc_btn
+    th, stop_event, get_state = start_daily_midnight(_job, tz="Europe/Stockholm")
+    return {"thread": th, "stop_event": stop_event, "get_state": get_state}
 
-# --- Главная страница ---
+# --- Основная страница ---
 def main_page(conn, analyzer, api_key):
-    env_diagnostics_sidebar()
     # Получаем данные с кэшированием
     df_all = get_calculated_data_cached(conn)
-    st.button("Очистить кэш индикаторов", on_click=clear_get_calculated_data)
+    st.button("Очистить кэш", on_click=clear_get_calculated_data)
 
     if df_all is None or df_all.empty:
         st.info("Данные не найдены или пусты.")
@@ -223,7 +206,7 @@ def main_page(conn, analyzer, api_key):
     new_adaptive_buy = col3.checkbox("New Adaptive Buy Signal", value=True)
     new_adaptive_sell = col4.checkbox("New Adaptive Sell Signal", value=True)
 
-    # Построение условия фильтрации через mask
+    # Построение условия фильтрации через mask (без булевой неоднозначности)
     mask = pd.Series(False, index=filtered_df.index)
     if adaptive_buy and 'Adaptive_Buy_Signal' in filtered_df.columns:
         mask |= (filtered_df['Adaptive_Buy_Signal'] == 1)
@@ -281,10 +264,6 @@ def main_page(conn, analyzer, api_key):
         elif isinstance(selected_rows_raw, dict):
             selected = selected_rows_raw
 
-    # ПАРАМЕТРЫ СТРАТЕГИИ / ПЕРЕРАСЧЁТ
-    max_hold, prefer_tp, atr_mult_sl, atr_mult_tp, recalc_btn = strategy_params_sidebar()
-
-    # Плашка выбранной заявки
     if selected is not None:
         selected_ticker = selected.get("contract_code")
         st.sidebar.write(f"Выбран тикер: {selected_ticker}")
@@ -351,69 +330,8 @@ def main_page(conn, analyzer, api_key):
 
         with right_col:
             st.write("Параметры заявки (в разработке)")
-
     else:
         st.info("Пожалуйста, выберите заявку из таблицы.")
-
-    # === ПЕРЕРАСЧЁТ ПРИБЫЛИ + ЭКВИТИ / ЭКСПОРТ ===
-    st.markdown("---")
-    st.markdown("## Перерасчёт прибыли и кривая эквити")
-    profit_col_out = None
-
-    if recalc_btn:
-        # работаем на копии, чтобы не портить кэш
-        df_recalc = df_all.copy()
-
-        # Если есть ATR-версия, считаем по Final_Buy_Signal
-        if HAS_ATR_PROFIT and 'Final_Buy_Signal' in df_recalc.columns:
-            df_recalc = vectorized_dynamic_profit_atr(
-                df_recalc,
-                signal_col='Final_Buy_Signal',
-                profit_col='Profit_Final_Buy_ATR',
-                exit_date_col='Exit_Date_Final_Buy_ATR',
-                exit_price_col='Exit_Price_Final_Buy_ATR',
-                max_holding_days=max_hold,
-                atr_mult_sl=atr_mult_sl,
-                atr_mult_tp=atr_mult_tp,
-                prefer_tp=prefer_tp,
-                is_short=False
-            )
-            profit_col_out = 'Profit_Final_Buy_ATR'
-        else:
-            # fallback: базовая функция (±0.5% внутри indicators.vectorized_dynamic_profit)
-            # посчитаем для Final_Buy_Signal, если его нет — для Adaptive_Buy_Signal
-            signal_col = 'Final_Buy_Signal' if 'Final_Buy_Signal' in df_recalc.columns else 'Adaptive_Buy_Signal'
-            out_profit = 'Profit_Recalc_Base'
-            out_exit_d = 'Exit_Date_Recalc_Base'
-            out_exit_p = 'Exit_Price_Recalc_Base'
-            df_recalc = vectorized_dynamic_profit(
-                df_recalc,
-                signal_col=signal_col,
-                profit_col=out_profit,
-                exit_date_col=out_exit_d,
-                exit_price_col=out_exit_p,
-                max_holding_days=max_hold,
-                is_short=False
-            )
-            profit_col_out = out_profit
-            st.info("Пересчитано базовой моделью (±0.5%). Чтобы использовать ATR — добавь vectorized_dynamic_profit_atr в indicators.py.")
-
-        # Эквити-кривая
-        trades = df_recalc.loc[df_recalc.get('Final_Buy_Signal', df_recalc.get('Adaptive_Buy_Signal', 0)) == 1, [ 'date', profit_col_out ]].dropna()
-        if not trades.empty:
-            eq = trades[profit_col_out].cumsum().reset_index(drop=True)
-            st.line_chart(eq)
-            st.caption(f"Показана накопленная сумма процентов по сделкам (кол-во: {len(trades)})")
-        else:
-            st.warning("Нет сделок для построения эквити при выбранных параметрах.")
-
-        # Экспорт
-        st.download_button(
-            "Экспорт пересчитанных сигналов (CSV)",
-            df_recalc.to_csv(index=False).encode("utf-8-sig"),
-            file_name="signals_recalc.csv",
-            mime="text/csv"
-        )
 
     # === Сводка сигналов ===
     df_signals = df_all[
@@ -458,7 +376,7 @@ def main_page(conn, analyzer, api_key):
     st.markdown("## Сводка по сигналам (агрегировано по тикеру)")
     st.write(summary)
 
-    # Агрегация по периодам (без ошибок при отсутствии столбца date)
+    # Агрегация по периодам
     if 'date' in df_signals.columns:
         df_signals['date'] = pd.to_datetime(df_signals['date'])
         df_signals['month'] = df_signals['date'].dt.to_period('M')
@@ -505,11 +423,10 @@ def main_page(conn, analyzer, api_key):
         st.write("### Сводка по годам:")
         st.write(summary_by_year)
 
-
 def update_data_page(conn, analyzer):
-    env_diagnostics_sidebar()
     st.header("Обновление данных")
     update_mode = st.sidebar.selectbox("Выберите режим обновления:", ["Загрузить CSV", "API price"])
+
     if update_mode == "Загрузить CSV":
         csv_upload_mode = st.sidebar.selectbox("Выберите тип загрузки CSV:", ["Массовая загрузка (Bulk)", "Инкрементальная загрузка"])
         if "csv_data" not in st.session_state:
@@ -539,42 +456,31 @@ def update_data_page(conn, analyzer):
                 st.error(f"Ошибка при загрузке CSV: {e}")
         else:
             st.info("Ожидается загрузка CSV файла.")
+
     elif update_mode == "API price":
         st.write("Обновление данных через Tinkoff API для тикеров из базы.")
-        api_update_mode = st.sidebar.selectbox("Выберите тип обновления через API:", ["Полное обновление", "Обновить только недостающие рыночные данные"])
-        if st.button("Запустить обновление через API"):
-            with st.spinner("Обновление данных через API..."):
-                if api_update_mode == "Полное обновление":
-                    log_messages = auto_update_all_tickers(analyzer, conn)
-                else:
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT DISTINCT contract_code FROM companies")
-                    tickers = [row[0] for row in cursor.fetchall()]
-                    log_messages = []
-                    figi_mapping = analyzer.get_figi_mapping()
-                    for ticker in tickers:
-                        st.write(f"Проверяем {ticker}...")
-                        norm_ticker = normalize_ticker(ticker)
-                        if norm_ticker not in figi_mapping:
-                            log_messages.append(f"FIGI для {ticker} не найден.")
-                            continue
-                        figi = figi_mapping[norm_ticker] if norm_ticker in figi_mapping else figi_mapping.get(ticker)
-                        if not figi:
-                            log_messages.append(f"FIGI для {ticker} не найден (после нормализации).")
-                            continue
-                        stock_data = analyzer.get_stock_data(figi)
-                        if stock_data is None or stock_data.empty:
-                            log_messages.append(f"Нет рыночных данных для {ticker}.")
-                            continue
-                        update_log = update_missing_market_data(analyzer, conn, ticker, stock_data)
-                        log_messages.extend(update_log)
-                for msg in log_messages:
-                    st.write(msg)
-            st.success("Обновление через API завершено!")
+        api_update_mode = st.radio("Тип обновления:", ["Полное обновление", "Только недостающие данные (инкремент)"], horizontal=True)
+        full_update = (api_update_mode == "Полное обновление")
 
+        # Кнопка мгновенного запуска обновления
+        if st.button("🔄 Обновить сейчас (API price)"):
+            with st.spinner("Запуск обновления..."):
+                logs = run_api_update_job(full_update=full_update)
+            st.success("Готово!")
+            for m in logs:
+                st.write("•", m)
+
+        # Показать статус планировщика
+        try:
+            sched = init_daily_scheduler()
+            st.markdown("### Авто-обновление (каждый день в 00:00, Europe/Stockholm)")
+            state = sched["get_state"]()
+            st.write("Следующий автозапуск:", state["next_run"])
+            st.write("Последний автозапуск:", state["last_run"])
+        except Exception as e:
+            st.info(f"Планировщик не инициализирован: {e}")
 
 def charts_page(conn):
-    env_diagnostics_sidebar()
     st.header("Графики")
     data = database.load_data_from_db(conn)
     data_daily = database.load_daily_data_from_db(conn)
@@ -632,7 +538,6 @@ def charts_page(conn):
         if fig is not None:
             st.pyplot(fig)
 
-
 def countPosition(conn):
     data = database.load_data_from_db(conn)
     df = pd.DataFrame(data)
@@ -643,7 +548,6 @@ def countPosition(conn):
     df_last = df[df['date'] == last_date]
     sums = df_last[['value1', 'value2', 'value3', 'value4']].sum()
     return sums
-
 
 def main():
     # Откроем соединение с БД
@@ -663,20 +567,24 @@ def main():
     # Показ информации о БД в sidebar
     try:
         from database import DB_PATH
-        # st.sidebar.write("DB path:", DB_PATH)
+        st.sidebar.write("DB path:", DB_PATH)
         try:
-            print('jj')
-            # st.sidebar.write("DB size (bytes):", os.path.getsize(DB_PATH))
+            st.sidebar.write("DB size (bytes):", os.path.getsize(DB_PATH))
         except Exception:
             st.sidebar.write("DB: не найден или ещё не создан")
     except Exception:
         pass
 
-    # безопасное получение ключа
-    api_key = st.secrets.get("TINKOFF_API_KEY") or st.secrets.get("tinkoff", {}).get("api_key") or os.getenv("TINKOFF_API_KEY")
+    api_key = _read_api_key()
     if not api_key:
         st.warning("TINKOFF API key not found — Tinkoff calls will be disabled. Set st.secrets['TINKOFF_API_KEY'] or env TINKOFF_API_KEY.")
     analyzer = StockAnalyzer(api_key, db_conn=conn)
+
+    # Инициализируем планировщик один раз (ресурс на процесс)
+    sched = init_daily_scheduler()
+    st.sidebar.markdown("### Авто-обновление (каждый день в 00:00)")
+    st.sidebar.write("Следующий запуск:", sched["get_state"]()["next_run"])
+    st.sidebar.write("Последний запуск:", sched["get_state"]()["last_run"])
 
     st.sidebar.header("Навигация")
     navigation = st.sidebar.radio("Перейти к", ["Главная", "Обновление данных", "Графики", "DB health"])
@@ -695,7 +603,6 @@ def main():
         st.sidebar.info("Невозможно посчитать позиции (нет данных).")
 
     conn.close()
-
 
 if __name__ == "__main__":
     main()
