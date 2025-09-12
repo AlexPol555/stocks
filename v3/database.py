@@ -1,23 +1,23 @@
-# database.py
-import sqlite3
-import pandas as pd
-import decimal
+# database.py (вставить/заменить этот блок в начале файла)
 import os
-from typing import Optional, Dict, Any
+import sqlite3
+import decimal
+import logging
 
-# Адаптер для decimal -> float при записи в sqlite
 sqlite3.register_adapter(decimal.Decimal, float)
+logger = logging.getLogger(__name__)
 
-# Имя БД (можно переопределить через env переменную)
-DB_NAME = os.getenv("STOCK_DB", "stock_data.db")
+# Храним файл БД в рабочей директории приложения (Streamlit Cloud)
+DB_FILENAME = os.environ.get("STOCK_DB_FILENAME", "stock_data.db")
+DB_PATH = os.path.join(os.getcwd(), DB_FILENAME)
 
-def get_connection(db_path: str = DB_NAME) -> sqlite3.Connection:
+def get_connection(db_path: str = None):
     """
-    Возвращает соединение с SQLite базой.
-    check_same_thread=False чтобы можно было использовать соединение из разных потоков (Streamlit).
+    Возвращает sqlite3 connection. По умолчанию — рабочая директория приложения.
+    check_same_thread=False полезно для использования в Streamlit.
     """
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+    path = db_path or DB_PATH
+    conn = sqlite3.connect(path, check_same_thread=False)
     return conn
 
 def create_tables(conn: sqlite3.Connection):

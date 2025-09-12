@@ -31,69 +31,68 @@ from data_loader import load_csv_data
 import http.client
 import json
 
-logger = logging.getLogger(__name__)
+# В файле stock_analyzer.py замените конструктор и метод get_figi_mapping на этот блок:
 
+import logging
+logger = logging.getLogger(__name__)
+import streamlit as st
 
 class StockAnalyzer:
-    def __init__(self, api_key: str = None):
+    def __init__(self, api_key, db_conn=None):
         self.api_key = api_key
+        self.db_conn = db_conn
 
     def get_figi_mapping(self) -> dict:
         """
-        Получает отображение тикера -> FIGI для акций.
-        Если Tinkoff SDK недоступен — возвращает пустой dict.
+        Возвращает mapping ticker -> figi.
+        Поведение:
+         - если доступен tinkoff SDK и задан api_key — используем API;
+         - иначе, пытаемся прочитать figi из таблицы companies (если db_conn передан);
+         - иначе возвращаем пустой словарь и логируем причину.
         """
-        if not TINKOFF_AVAILABLE or not self.api_key:
-            logger.warning("Tinkoff SDK недоступен или api_key не задан — get_figi_mapping возвращает {}")
-            return {}
+        # 1) Проверка ключа
+        if not self.api_key:
+            logger.warning("Tinkoff API key not provided; get_figi_mapping вернёт mapping из БД (если есть) или {}.")
+            st.warning("Tinkoff API key не задан: FIGI mapping пуст. Добавьте TINKOFF_API_KEY в Streamlit Secrets, если нужен API.")
+            return self._figi_from_db_or_empty()
 
+        # 2) Попытка динамически импортировать SDK (чтобы избежать ImportError во время импорта модуля)
+        try:
+            from tinkoff.invest import Client
+        except Exception as e:
+            logger.warning("Tinkoff SDK не найден: %s. Попробую получить FIGI из БД.", e)
+            st.warning("Tinkoff SDK не установлен в окружении (ModuleNotFoundError). Проверьте requirements.txt.")
+            return self._figi_from_db_or_empty()
+
+        # 3) Если импорт успешен — вызываем API
         try:
             with Client(self.api_key) as client:
-                instruments: InstrumentsService = client.instruments
-                shares = instruments.shares().instruments
-                return {share.ticker: share.figi for share in shares}
+                instruments = client.instruments.shares().instruments
+                mapping = {share.ticker: share.figi for share in instruments if getattr(share, 'ticker', None)}
+                if not mapping:
+                    logger.warning("Tinkoff API вернул пустой список инструментов.")
+                    return self._figi_from_db_or_empty()
+                return mapping
         except Exception as e:
-            logger.error(f"Ошибка при получении FIGI: {e}")
+            logger.exception("Ошибка при запросе FIGI через Tinkoff API: %s", e)
+            st.warning("Ошибка при вызове Tinkoff API. См. логи.")
+            return self._figi_from_db_or_empty()
+
+    def _figi_from_db_or_empty(self):
+        """
+        Попытка получить mapping из БД (companies.figi) если доступно соединение.
+        """
+        if not self.db_conn:
+            logger.info("DB connection не передан — возвращаю пустой mapping.")
             return {}
-
-    def get_stock_data(self, figi: str) -> pd.DataFrame:
-        """
-        Получает исторические свечи по FIGI и возвращает DataFrame.
-        Если Tinkoff SDK недоступен — возвращает пустой DataFrame.
-        """
-        if not TINKOFF_AVAILABLE or not self.api_key:
-            logger.warning("Tinkoff SDK недоступен или api_key не задан — get_stock_data вернул пустой DataFrame")
-            return pd.DataFrame()
-
         try:
-            with Client(self.api_key) as client:
-                market_data: MarketDataService = client.market_data
-                to_date = datetime.now(timezone.utc)
-                from_date = to_date - timedelta(days=365)
-                candles = market_data.get_candles(
-                    figi=figi,
-                    from_=from_date,
-                    to=to_date,
-                    interval=CandleInterval.CANDLE_INTERVAL_DAY
-                ).candles
-
-                if not candles:
-                    logger.warning(f"Нет данных для FIGI {figi}")
-                    return pd.DataFrame()
-
-                data = pd.DataFrame([{
-                    "time": candle.time,
-                    "open": quotation_to_decimal(candle.open),
-                    "close": quotation_to_decimal(candle.close),
-                    "high": quotation_to_decimal(candle.high),
-                    "low": quotation_to_decimal(candle.low),
-                    "volume": candle.volume
-                } for candle in candles])
-                return data
-
+            import pandas as pd
+            query = "SELECT contract_code, figi FROM companies WHERE figi IS NOT NULL AND figi != '';"
+            df = pd.read_sql_query(query, self.db_conn)
+            return dict(zip(df['contract_code'], df['figi']))
         except Exception as e:
-            logger.error(f"Ошибка получения данных для FIGI {figi}: {e}")
-            return pd.DataFrame()
+            logger.exception("Не удалось получить FIGI из БД: %s", e)
+            return {}
 
     @staticmethod
     def get_technical_indicators(ticker_uid, from_date, to_date, token):

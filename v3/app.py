@@ -443,12 +443,26 @@ def main():
     # Работа с DB через модуль database
     conn = database.get_connection()
     database.create_tables(conn)
+    import pathlib, os
+    from database import DB_PATH
+
+    st.sidebar.write("DB path:", DB_PATH)
+    try:
+        st.sidebar.write("DB size (bytes):", os.path.getsize(DB_PATH))
+    except Exception:
+        st.sidebar.write("DB: не найден или ещё не создан")
+
+    # Кнопка — скачать копию БД (опционально)
+    db_path_obj = pathlib.Path(DB_PATH)
+    if db_path_obj.exists():
+        with open(db_path_obj, "rb") as f:
+            st.sidebar.download_button("Скачать копию БД", f, file_name=db_path_obj.name)
 
     # безопасное получение ключа
     api_key = st.secrets.get("TINKOFF_API_KEY") or st.secrets.get("tinkoff", {}).get("api_key") or os.getenv("TINKOFF_API_KEY")
     if not api_key:
         st.warning("TINKOFF API key not found — Tinkoff calls will be disabled. Set st.secrets['TINKOFF_API_KEY'] or env TINKOFF_API_KEY.")
-    analyzer = StockAnalyzer(api_key)
+    analyzer = StockAnalyzer(api_key, db_conn=conn)
 
     st.sidebar.header("Навигация")
     navigation = st.sidebar.radio("Перейти к", ["Главная", "Обновление данных", "Графики"])
