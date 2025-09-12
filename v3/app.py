@@ -5,6 +5,9 @@ import numpy as np
 import database
 import logging
 import os
+from typing import Optional
+from pprint import pprint
+import sqlite3
 
 # попытка импортировать matplotlib для отрисовки графиков (устойчивая заглушка)
 try:
