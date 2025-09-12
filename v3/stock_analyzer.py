@@ -3,7 +3,7 @@ import os
 import logging
 import pandas as pd
 from datetime import datetime, timedelta, timezone
-from tinkoff.invest import Client, CandleInterval
+# from tinkoff.invest import Client, CandleInterval
 from tinkoff.invest.services import InstrumentsService, MarketDataService
 from tinkoff.invest.utils import quotation_to_decimal
 import streamlit as st
