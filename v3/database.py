@@ -4,7 +4,9 @@ import sqlite3
 import decimal
 import logging
 import pandas as pd
-from typing import Optional
+from typing import Optional, List, Dict, Any
+
+
 
 sqlite3.register_adapter(decimal.Decimal, float)
 logger = logging.getLogger(__name__)
