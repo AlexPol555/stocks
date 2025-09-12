@@ -665,7 +665,8 @@ def main():
         from database import DB_PATH
         # st.sidebar.write("DB path:", DB_PATH)
         try:
-            st.sidebar.write("DB size (bytes):", os.path.getsize(DB_PATH))
+            print('jj')
+            # st.sidebar.write("DB size (bytes):", os.path.getsize(DB_PATH))
         except Exception:
             st.sidebar.write("DB: не найден или ещё не создан")
     except Exception:
