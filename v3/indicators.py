@@ -279,7 +279,8 @@ def calculate_technical_indicators(data):
 
 @st.cache_data(show_spinner=True)
 def get_calculated_data(_conn):
-    mergeData = mergeMetrDaily(_conn)
+    import database
+    mergeData = database.mergeMetrDaily(_conn)
     results = []
     for contract, group in mergeData.groupby('contract_code'):
         group = group.copy()
