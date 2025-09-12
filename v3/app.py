@@ -13,7 +13,7 @@ from stock_analyzer import StockAnalyzer
 from auto_update import auto_update_all_tickers, normalize_ticker, update_missing_market_data
 from visualization import plot_daily_analysis, plot_stock_analysis, plot_grafik_candle_days
 from indicators import get_calculated_data, clear_get_calculated_data
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
+# from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
 from orders import create_order
 # from testStr import optimize_strategy
 
@@ -62,7 +62,7 @@ def main_page(conn, analyzer, api_key):
     
     # Получаем данные с кэшированием
     df_all = get_calculated_data_cached(conn)
-    st.button("Очистить кэш",on_click=clear_get_calculated_data())
+    st.button("Очистить кэш", on_click=clear_get_calculated_data)
     # Настройки фильтрации: по дате, по тикеру или без фильтрации
     unique_dates = sorted(df_all["date"].unique(), reverse=True)
     tickers = df_all["contract_code"].unique()
