@@ -1,0 +1,11 @@
+streamlit
+pandas
+numpy
+matplotlib
+plotly
+mplfinance
+scikit-learn
+streamlit-aggrid
+sqlalchemy
+psycopg2-binary
+tinkoff-invest
