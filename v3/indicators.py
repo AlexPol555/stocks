@@ -279,14 +279,43 @@ def calculate_technical_indicators(data):
 
 @st.cache_data(show_spinner=True)
 def get_calculated_data(_conn):
-    import database
-    mergeData = database.mergeMetrDaily(_conn)
+    """
+    Возвращает объединённый DataFrame с рассчитанными индикаторами для каждого контракта.
+    Защищено от пустой БД — в этом случае возвращается пустой DataFrame.
+    """
+    import database  # ленивый импорт, чтобы избежать circular imports
+    try:
+        mergeData = database.mergeMetrDaily(_conn)
+    except Exception as e:
+        st.warning(f"Ошибка при вызове mergeMetrDaily: {e}")
+        return pd.DataFrame()
+
+    # Диагностика: нет строк -> сообщаем и возвращаем пустой DF
+    if mergeData is None or mergeData.empty:
+        st.warning("Нет данных: mergeMetrDaily вернул пустой DataFrame. Проверьте таблицы daily_data и metrics в БД.")
+        # для удобства можно вернуть заранее подготовленные колонки, если требуется
+        return pd.DataFrame()
+
     results = []
+    # Группируем по контракту и считаем индикаторы для каждой группы
     for contract, group in mergeData.groupby('contract_code'):
-        group = group.copy()
-        results.append(calculate_technical_indicators(group))
-    df_all = pd.concat(results)
-    return df_all.drop_duplicates()
+        try:
+            # предполагается, что calculate_technical_indicators возвращает DataFrame
+            results.append(calculate_technical_indicators(group.copy()))
+        except Exception as e:
+            # локальный лог — не прерываем весь процесс из-за одной неудачной группы
+            st.warning(f"Ошибка обработки контракта {contract}: {e}")
+
+    if not results:
+        st.warning("После обработки групп не осталось данных для объединения (results пуст).")
+        return pd.DataFrame()
+
+    try:
+        df_all = pd.concat(results, ignore_index=True)
+        return df_all.drop_duplicates()
+    except Exception as e:
+        st.error(f"Ошибка объединения результатов: {e}")
+        return pd.DataFrame()
 
 def clear_get_calculated_data():
     get_calculated_data.clear()
