@@ -222,8 +222,8 @@ def update_technical_indicators(conn: sqlite3.Connection,
 
 def mergeMetrDaily(conn: sqlite3.Connection) -> pd.DataFrame:
     """
-    Возвращает DataFrame, объединяющий daily_data и нужные метрики (Открытые позиции, Количество лиц).
-    SQL построен так, как в примере ранее — с LEFT JOIN по датам и компаниям.
+    Возвращает DataFrame: daily_data (все строки) + метрики (если есть) по company_id и дате.
+    Использует DATE(...) для устойчивого сравнения дат.
     """
     cursor = conn.cursor()
     query = """
@@ -265,7 +265,7 @@ def mergeMetrDaily(conn: sqlite3.Connection) -> pd.DataFrame:
         WHERE metric_type = 'Открытые позиции'
     ) AS op 
         ON dd.company_id = op.company_id 
-        AND dd.date = op.date
+        AND DATE(dd.date) = DATE(op.date)
         
     LEFT JOIN (
         SELECT 
@@ -280,16 +280,20 @@ def mergeMetrDaily(conn: sqlite3.Connection) -> pd.DataFrame:
         WHERE metric_type = 'Количество лиц'
     ) AS kl 
         ON dd.company_id = kl.company_id 
-        AND dd.date = kl.date
+        AND DATE(dd.date) = DATE(kl.date)
         
     ORDER BY dd.date;
     """
     try:
         cursor.execute(query)
         columns = [col[0] for col in cursor.description]
-        data = cursor.fetchall()
-        df = pd.DataFrame(data, columns=columns)
+        rows = cursor.fetchall()
+        df = pd.DataFrame(rows, columns=columns)
+        # Приведём тип даты к pd.Timestamp
+        if not df.empty:
+            df['date'] = pd.to_datetime(df['date']).dt.date
         return df.drop_duplicates()
     except Exception:
-        logger.exception("Ошибка при выполнении mergeMetrDaily")
+        import logging
+        logging.getLogger(__name__).exception("Ошибка при выполнении mergeMetrDaily")
         return pd.DataFrame()
