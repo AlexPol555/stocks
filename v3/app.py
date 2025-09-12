@@ -9,12 +9,14 @@ from typing import Optional
 from pprint import pprint
 import sqlite3
 
+logger = logging.getLogger(__name__)
+
 # попытка импортировать matplotlib для отрисовки графиков (устойчивая заглушка)
 try:
     import matplotlib.pyplot as plt
 except Exception as _e:
     plt = None
-    logging.getLogger(__name__).warning("matplotlib не найден: %s", _e)
+    logger.warning("matplotlib не найден: %s", _e)
 
 # Импорт необходимых функций из ваших модулей
 from populate_database import bulk_populate_database_from_csv, incremental_populate_database_from_csv
@@ -33,12 +35,12 @@ try:
     ST_AGGRID_AVAILABLE = True
 except Exception as _e:
     ST_AGGRID_AVAILABLE = False
-    logger = logging.getLogger(__name__)
     logger.warning("st_aggrid не найден: %s", _e)
 
     # Простая заглушка: отобразить DataFrame через st.dataframe и вернуть структуру с selected_rows
     def AgGrid(df, gridOptions=None, height=400, fit_columns_on_grid_load=True, **kwargs):
         st.dataframe(df)
+        # возвращаем структуру, похожую на AgGrid response
         return {"selected_rows": []}
 
     class GridOptionsBuilder:
@@ -62,10 +64,33 @@ except Exception as _e:
 
 # Функция с кэшированием расчётов технических индикаторов
 def get_calculated_data_cached(_conn):
-    # Аргумент с ведущим подчеркиванием не будет учитываться при хэшировании
     data = get_calculated_data(_conn)
     return data
 
+# Вспомогательная функция: безопасно открыть БД, поддерживая разные имена функций в модуле database
+def open_database_connection():
+    for name in ("get_connection", "get_conn", "get_connection"):
+        if hasattr(database, name):
+            try:
+                return getattr(database, name)()
+            except TypeError:
+                # если функция ожидает аргументы — вызов без аргументов мог бы упасть, попробуем без
+                try:
+                    return getattr(database, name)(None)
+                except Exception:
+                    continue
+            except Exception as e:
+                logger.exception("Ошибка при вызове database.%s: %s", name, e)
+    # если не удалось — попробуем прямой коннект по пути DB_PATH, если есть
+    if hasattr(database, "DB_PATH"):
+        path = getattr(database, "DB_PATH")
+        try:
+            return sqlite3.connect(path, check_same_thread=False)
+        except Exception as e:
+            logger.exception("Не удалось подключиться к DB_PATH %s: %s", path, e)
+    raise RuntimeError("Не удалось открыть соединение с БД. Проверьте модуль database.")
+
+# --- Утилиты для диагностики БД (используется в debug / sidebar) ---
 def db_health_check(conn):
     with conn:
         def q(sql, params=()):
@@ -103,6 +128,35 @@ def db_health_check(conn):
             LIMIT 20;
         """))
 
+# --- Безопасное извлечение selected_rows из ответа AgGrid ---
+def _extract_selected_rows(grid_response):
+    """
+    Попытки извлечь выбранные строки в нескольких форматах:
+      - dict (-> 'selected_rows' / 'data')
+      - объект с атрибутом .selected_rows или .data
+      - list
+    Возвращает либо DataFrame, либо list, либо dict, либо None.
+    """
+    try:
+        # dict-like
+        if isinstance(grid_response, dict):
+            return grid_response.get("selected_rows", grid_response.get("data", None))
+
+        # объект с атрибутами
+        if hasattr(grid_response, "selected_rows"):
+            return getattr(grid_response, "selected_rows")
+        if hasattr(grid_response, "data"):
+            return getattr(grid_response, "data")
+
+        # list-like
+        if isinstance(grid_response, list):
+            return grid_response
+
+    except Exception as e:
+        logger.exception("Ошибка при извлечении selected_rows: %s", e)
+    return None
+
+# --- Основная страница ---
 def main_page(conn, analyzer, api_key):
     # Получаем данные с кэшированием
     df_all = get_calculated_data_cached(conn)
@@ -113,7 +167,7 @@ def main_page(conn, analyzer, api_key):
         return
 
     # Настройки фильтрации: по дате, по тикеру или без фильтрации
-    unique_dates = sorted(df_all["date"].unique(), reverse=True)
+    unique_dates = sorted(list(df_all["date"].unique()), reverse=True)
     tickers = df_all["contract_code"].unique()
     filter_type = st.sidebar.radio("Фильтровать данные по:", ("По дате", "По тикеру", "Без фильтрации"))
     if filter_type == "По дате":
@@ -131,19 +185,19 @@ def main_page(conn, analyzer, api_key):
     new_adaptive_buy = col3.checkbox("New Adaptive Buy Signal", value=True)
     new_adaptive_sell = col4.checkbox("New Adaptive Sell Signal", value=True)
 
-    # Построение условия фильтрации
-    condition = False
-    if adaptive_buy:
-        condition |= (filtered_df['Adaptive_Buy_Signal'] == 1)
-    if adaptive_sell:
-        condition |= (filtered_df['Adaptive_Sell_Signal'] == 1)
-    if new_adaptive_buy:
-        condition |= (filtered_df['New_Adaptive_Buy_Signal'] == 1)
-    if new_adaptive_sell:
-        condition |= (filtered_df['New_Adaptive_Sell_Signal'] == 1)
+    # Построение условия фильтрации через mask (без булевой неоднозначности)
+    mask = pd.Series(False, index=filtered_df.index)
+    if adaptive_buy and 'Adaptive_Buy_Signal' in filtered_df.columns:
+        mask |= (filtered_df['Adaptive_Buy_Signal'] == 1)
+    if adaptive_sell and 'Adaptive_Sell_Signal' in filtered_df.columns:
+        mask |= (filtered_df['Adaptive_Sell_Signal'] == 1)
+    if new_adaptive_buy and 'New_Adaptive_Buy_Signal' in filtered_df.columns:
+        mask |= (filtered_df['New_Adaptive_Buy_Signal'] == 1)
+    if new_adaptive_sell and 'New_Adaptive_Sell_Signal' in filtered_df.columns:
+        mask |= (filtered_df['New_Adaptive_Sell_Signal'] == 1)
 
-    if condition is not False:
-        filtered_df = filtered_df[condition]
+    if mask.any():
+        filtered_df = filtered_df[mask]
     else:
         filtered_df = filtered_df.copy()
 
@@ -165,35 +219,48 @@ def main_page(conn, analyzer, api_key):
         theme="alpine"
     )
 
-    # Извлекаем выбранную строку
-    selected_rows = None
-    if isinstance(grid_response, dict):
-        selected_rows = grid_response.get("selected_rows")
-    else:
-        # В случае нестандартного объекта пытаемся достать атрибуты
-        selected_rows = getattr(grid_response, "selected_rows", None) or getattr(grid_response, "data", None)
+    # --- Извлечение выбранной строки (безопасно) ---
+    selected_rows_raw = _extract_selected_rows(grid_response)
 
     selected = None
-    if selected_rows is not None:
-        if isinstance(selected_rows, pd.DataFrame):
-            if not selected_rows.empty:
-                selected = selected_rows.iloc[0]
-        elif isinstance(selected_rows, list):
-            if len(selected_rows) > 0:
-                selected = selected_rows[0]
+    if selected_rows_raw is not None:
+        # DataFrame
+        if isinstance(selected_rows_raw, pd.DataFrame):
+            if not selected_rows_raw.empty:
+                selected = selected_rows_raw.iloc[0].to_dict()
+        # list (list of dicts / list of Series)
+        elif isinstance(selected_rows_raw, list):
+            if len(selected_rows_raw) > 0:
+                first = selected_rows_raw[0]
+                if isinstance(first, pd.Series):
+                    selected = first.to_dict()
+                elif isinstance(first, dict):
+                    selected = first
+                else:
+                    try:
+                        selected = dict(first)
+                    except Exception:
+                        selected = None
+        # dict-like
+        elif isinstance(selected_rows_raw, dict):
+            selected = selected_rows_raw
 
+    # Если есть выбранная строка — показываем подробности и графики
     if selected is not None:
         selected_ticker = selected.get("contract_code")
         st.sidebar.write(f"Выбран тикер: {selected_ticker}")
 
         # Загружаем данные для графиков через database
-        data = database.load_data_from_db(conn)
+        try:
+            data = database.load_data_from_db(conn)
+        except Exception:
+            data = pd.DataFrame()
         if data.empty:
             st.error("Нет данных для построения графика. Сначала обновите данные.")
         else:
-            filtered_df = data[data['contract_code'] == selected_ticker]
-            filtered_df_1 = filtered_df[filtered_df["metric_type"] == "Изменение"]
-            filtered_df_2 = filtered_df[filtered_df["metric_type"] == "Открытые позиции"]
+            filtered_df_full = data[data['contract_code'] == selected_ticker]
+            filtered_df_1 = filtered_df_full[filtered_df_full["metric_type"] == "Изменение"]
+            filtered_df_2 = filtered_df_full[filtered_df_full["metric_type"] == "Открытые позиции"]
             col1, col2 = st.columns(2)
             with col1:
                 st.dataframe(filtered_df_1)
@@ -258,29 +325,30 @@ def main_page(conn, analyzer, api_key):
 
     # Сводка сигналов
     df_signals = df_all[
-        (df_all['Adaptive_Buy_Signal'] == 1) |
-        (df_all['Adaptive_Sell_Signal'] == 1) |
-        (df_all['New_Adaptive_Buy_Signal'] == 1) |
-        (df_all['New_Adaptive_Sell_Signal'] == 1)
+        (df_all.get('Adaptive_Buy_Signal', 0) == 1) |
+        (df_all.get('Adaptive_Sell_Signal', 0) == 1) |
+        (df_all.get('New_Adaptive_Buy_Signal', 0) == 1) |
+        (df_all.get('New_Adaptive_Sell_Signal', 0) == 1)
     ].copy()
 
+    # безопасные .get при отсутствии колонок
     df_signals['Profit_Adaptive_Buy'] = np.where(
-        df_signals['Adaptive_Buy_Signal'] == 1,
+        df_signals.get('Adaptive_Buy_Signal', 0) == 1,
         df_signals.get('Dynamic_Profit_Adaptive_Buy', 0),
         0
     )
     df_signals['Profit_Adaptive_Sell'] = np.where(
-        df_signals['Adaptive_Sell_Signal'] == 1,
+        df_signals.get('Adaptive_Sell_Signal', 0) == 1,
         df_signals.get('Dynamic_Profit_Adaptive_Sell', 0),
         0
     )
     df_signals['Profit_New_Adaptive_Buy'] = np.where(
-        df_signals['New_Adaptive_Buy_Signal'] == 1,
+        df_signals.get('New_Adaptive_Buy_Signal', 0) == 1,
         df_signals.get('Dynamic_Profit_New_Adaptive_Buy', 0),
         0
     )
     df_signals['Profit_New_Adaptive_Sell'] = np.where(
-        df_signals['New_Adaptive_Sell_Signal'] == 1,
+        df_signals.get('New_Adaptive_Sell_Signal', 0) == 1,
         df_signals.get('Dynamic_Profit_New_Adaptive_Sell', 0),
         0
     )
@@ -298,53 +366,52 @@ def main_page(conn, analyzer, api_key):
 
     st.write(summary)
 
-    # Агрегация по периодам
-    df_signals['date'] = pd.to_datetime(df_signals['date'])
-    df_signals['month'] = df_signals['date'].dt.to_period('M')
-    df_signals['week'] = df_signals['date'].dt.to_period('W')
-    df_signals['year'] = df_signals['date'].dt.to_period('Y')
+    # Агрегация по периодам (без ошибок при отсутствии столбца date)
+    if 'date' in df_signals.columns:
+        df_signals['date'] = pd.to_datetime(df_signals['date'])
+        df_signals['month'] = df_signals['date'].dt.to_period('M')
+        df_signals['week'] = df_signals['date'].dt.to_period('W')
+        df_signals['year'] = df_signals['date'].dt.to_period('Y')
 
-    summary_by_month = df_signals.groupby('month').agg(
-        Adaptive_Buy_Signal=('Adaptive_Buy_Signal', 'sum'),
-        Adaptive_Sell_Signal=('Adaptive_Sell_Signal', 'sum'),
-        New_Adaptive_Buy_Signal=('New_Adaptive_Buy_Signal', 'sum'),
-        New_Adaptive_Sell_Signal=('New_Adaptive_Sell_Signal', 'sum'),
-        Profit_Adaptive_Buy=('Profit_Adaptive_Buy', 'sum'),
-        Profit_Adaptive_Sell=('Profit_Adaptive_Sell', 'sum'),
-        Profit_New_Adaptive_Buy=('Profit_New_Adaptive_Buy', 'sum'),
-        Profit_New_Adaptive_Sell=('Profit_New_Adaptive_Sell', 'sum')
-    ).reset_index()
+        summary_by_month = df_signals.groupby('month').agg(
+            Adaptive_Buy_Signal=('Adaptive_Buy_Signal', 'sum'),
+            Adaptive_Sell_Signal=('Adaptive_Sell_Signal', 'sum'),
+            New_Adaptive_Buy_Signal=('New_Adaptive_Buy_Signal', 'sum'),
+            New_Adaptive_Sell_Signal=('New_Adaptive_Sell_Signal', 'sum'),
+            Profit_Adaptive_Buy=('Profit_Adaptive_Buy', 'sum'),
+            Profit_Adaptive_Sell=('Profit_Adaptive_Sell', 'sum'),
+            Profit_New_Adaptive_Buy=('Profit_New_Adaptive_Buy', 'sum'),
+            Profit_New_Adaptive_Sell=('Profit_New_Adaptive_Sell', 'sum')
+        ).reset_index()
 
-    summary_by_week = df_signals.groupby('week').agg(
-        Adaptive_Buy_Signal=('Adaptive_Buy_Signal', 'sum'),
-        Adaptive_Sell_Signal=('Adaptive_Sell_Signal', 'sum'),
-        New_Adaptive_Buy_Signal=('New_Adaptive_Buy_Signal', 'sum'),
-        New_Adaptive_Sell_Signal=('New_Adaptive_Sell_Signal', 'sum'),
-        Profit_Adaptive_Buy=('Profit_Adaptive_Buy', 'sum'),
-        Profit_Adaptive_Sell=('Profit_Adaptive_Sell', 'sum'),
-        Profit_New_Adaptive_Buy=('Profit_New_Adaptive_Buy', 'sum'),
-        Profit_New_Adaptive_Sell=('Profit_New_Adaptive_Sell', 'sum')
-    ).reset_index()
+        summary_by_week = df_signals.groupby('week').agg(
+            Adaptive_Buy_Signal=('Adaptive_Buy_Signal', 'sum'),
+            Adaptive_Sell_Signal=('Adaptive_Sell_Signal', 'sum'),
+            New_Adaptive_Buy_Signal=('New_Adaptive_Buy_Signal', 'sum'),
+            New_Adaptive_Sell_Signal=('New_Adaptive_Sell_Signal', 'sum'),
+            Profit_Adaptive_Buy=('Profit_Adaptive_Buy', 'sum'),
+            Profit_Adaptive_Sell=('Profit_Adaptive_Sell', 'sum'),
+            Profit_New_Adaptive_Buy=('Profit_New_Adaptive_Buy', 'sum'),
+            Profit_New_Adaptive_Sell=('Profit_New_Adaptive_Sell', 'sum')
+        ).reset_index()
 
-    summary_by_year = df_signals.groupby('year').agg(
-        Adaptive_Buy_Signal=('Adaptive_Buy_Signal', 'sum'),
-        Adaptive_Sell_Signal=('Adaptive_Sell_Signal', 'sum'),
-        New_Adaptive_Buy_Signal=('New_Adaptive_Buy_Signal', 'sum'),
-        New_Adaptive_Sell_Signal=('New_Adaptive_Sell_Signal', 'sum'),
-        Profit=('Final_Buy_Signal', 'sum'),
-        Profit_Adaptive_Buy=('Profit_Adaptive_Buy', 'sum'),
-        Profit_Adaptive_Sell=('Profit_Adaptive_Sell', 'sum'),
-        Profit_New_Adaptive_Buy=('Profit_New_Adaptive_Buy', 'sum'),
-        Profit_New_Adaptive_Sell=('Profit_New_Adaptive_Sell', 'sum'),
-        Profit_Profit=('Dynamic_Profit_Final_Buy', 'sum')
-    ).reset_index()
+        summary_by_year = df_signals.groupby('year').agg(
+            Adaptive_Buy_Signal=('Adaptive_Buy_Signal', 'sum'),
+            Adaptive_Sell_Signal=('Adaptive_Sell_Signal', 'sum'),
+            New_Adaptive_Buy_Signal=('New_Adaptive_Buy_Signal', 'sum'),
+            New_Adaptive_Sell_Signal=('New_Adaptive_Sell_Signal', 'sum'),
+            Profit_Adaptive_Buy=('Profit_Adaptive_Buy', 'sum'),
+            Profit_Adaptive_Sell=('Profit_Adaptive_Sell', 'sum'),
+            Profit_New_Adaptive_Buy=('Profit_New_Adaptive_Buy', 'sum'),
+            Profit_New_Adaptive_Sell=('Profit_New_Adaptive_Sell', 'sum')
+        ).reset_index()
 
-    st.write("### Сводка по месяцам:")
-    st.write(summary_by_month)
-    st.write("### Сводка по неделям:")
-    st.write(summary_by_week)
-    st.write("### Сводка по годам:")
-    st.write(summary_by_year)
+        st.write("### Сводка по месяцам:")
+        st.write(summary_by_month)
+        st.write("### Сводка по неделям:")
+        st.write(summary_by_week)
+        st.write("### Сводка по годам:")
+        st.write(summary_by_year)
 
 
 def update_data_page(conn, analyzer):
@@ -472,6 +539,8 @@ def charts_page(conn):
 def countPosition(conn):
     data = database.load_data_from_db(conn)
     df = pd.DataFrame(data)
+    if df.empty:
+        return {}
     df['date'] = pd.to_datetime(df['date'])
     last_date = df['date'].max()
     df_last = df[df['date'] == last_date]
@@ -479,186 +548,32 @@ def countPosition(conn):
     return sums
 
 
-DB_PATH = os.environ.get("STOCK_DB_PATH", "stock_data.db")  # или полный путь: /mount/src/stocks/stock_data.db
-
-def get_conn(db_path: Optional[str] = None):
-    path = db_path or DB_PATH
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"DB not found: {path}")
-    return sqlite3.connect(path, check_same_thread=False)
-
-def get_counts(conn):
-    q = """
-    SELECT 
-      (SELECT COUNT(*) FROM companies) AS companies_cnt,
-      (SELECT COUNT(*) FROM daily_data) AS daily_data_cnt,
-      (SELECT COUNT(*) FROM metrics) AS metrics_cnt,
-      (SELECT COUNT(*) FROM technical_indicators) AS technical_indicators_cnt,
-      (SELECT COUNT(*) FROM company_parameters) AS company_parameters_cnt
-    ;
-    """
-    return pd.read_sql_query(q, conn).to_dict(orient='records')[0]
-
-def sample_rows(conn, table, limit=10):
-    return pd.read_sql_query(f"SELECT * FROM {table} LIMIT {limit}", conn)
-
-def company_id_type_info(conn, table='daily_data'):
-    df = pd.read_sql_query(f"SELECT company_id FROM {table} LIMIT 1000", conn)
-    # typeof in SQL:
-    cur = conn.cursor()
-    types = cur.execute(f"SELECT DISTINCT typeof(company_id) FROM {table}").fetchall()
-    types = [t[0] for t in types]
-    return {"distinct_sql_types": types, "sample_values": df['company_id'].head(20).tolist()}
-
-def find_unlinked_daily(conn, limit=100):
-    q = """
-    SELECT dd.rowid AS rowid, dd.company_id, dd.date
-    FROM daily_data dd
-    LEFT JOIN companies c ON dd.company_id = c.id
-    WHERE c.id IS NULL
-    LIMIT ?
-    """
-    return pd.read_sql_query(q, conn, params=(limit,))
-
-def find_unlinked_metrics(conn, limit=100):
-    q = """
-    SELECT m.rowid AS rowid, m.company_id, m.metric_type, m.date
-    FROM metrics m
-    LEFT JOIN companies c ON m.company_id = c.id
-    WHERE c.id IS NULL
-    LIMIT ?
-    """
-    return pd.read_sql_query(q, conn, params=(limit,))
-
-def candidate_contractcode_in_companyid(conn, limit=50):
-    # Есть ли company_id в daily_data, которые совпадают со значениями companies.contract_code?
-    q = """
-    SELECT DISTINCT dd.company_id
-    FROM daily_data dd
-    WHERE dd.company_id IN (SELECT contract_code FROM companies)
-    LIMIT ?
-    """
-    return pd.read_sql_query(q, conn, params=(limit,))
-
-def check_date_alignment(conn):
-    # Сравним уникальные форматы/примеры дат
-    dd_dates = pd.read_sql_query("SELECT DISTINCT date FROM daily_data ORDER BY date LIMIT 20", conn)['date'].tolist()
-    m_dates = pd.read_sql_query("SELECT DISTINCT date FROM metrics ORDER BY date LIMIT 20", conn)['date'].tolist()
-    return {"daily_data_examples": dd_dates, "metrics_examples": m_dates}
-
-def count_joined_pairs(conn):
-    q = """
-    SELECT 
-      (SELECT COUNT(*) FROM daily_data dd JOIN metrics m ON dd.company_id = m.company_id AND dd.date = m.date) AS exact_matches,
-      (SELECT COUNT(*) FROM daily_data) AS daily_rows,
-      (SELECT COUNT(*) FROM metrics) AS metrics_rows
-    ;
-    """
-    return pd.read_sql_query(q, conn).to_dict(orient='records')[0]
-
-def detailed_mismatch_examples(conn, limit=50):
-    # Возвращаем daily_data строки без метрик на ту же дату (и наоборот)
-    q1 = """
-    SELECT dd.rowid, dd.company_id, dd.date
-    FROM daily_data dd
-    LEFT JOIN metrics m ON dd.company_id = m.company_id AND dd.date = m.date
-    WHERE m.rowid IS NULL
-    LIMIT ?
-    """
-    q2 = """
-    SELECT m.rowid, m.company_id, m.metric_type, m.date
-    FROM metrics m
-    LEFT JOIN daily_data dd ON dd.company_id = m.company_id AND dd.date = m.date
-    WHERE dd.rowid IS NULL
-    LIMIT ?
-    """
-    a = pd.read_sql_query(q1, conn, params=(limit,))
-    b = pd.read_sql_query(q2, conn, params=(limit,))
-    return a, b
-
-def run_all_checks(db_path: Optional[str] = None):
-    conn = get_conn(db_path)
-    try:
-        print("DB path:", db_path or DB_PATH)
-        print("\n--- Counts ---")
-        pprint(get_counts(conn))
-
-        print("\n--- Sample companies ---")
-        print(sample_rows(conn, "companies", 5))
-
-        print("\n--- Sample daily_data ---")
-        print(sample_rows(conn, "daily_data", 5))
-
-        print("\n--- Sample metrics ---")
-        print(sample_rows(conn, "metrics", 5))
-
-        print("\n--- company_id types (daily_data) ---")
-        pprint(company_id_type_info(conn, 'daily_data'))
-
-        print("\n--- Unlinked daily_data rows (company_id not found in companies) ---")
-        df_unlinked_daily = find_unlinked_daily(conn, limit=200)
-        print(f"Found {len(df_unlinked_daily)} rows (showing up to 200):")
-        print(df_unlinked_daily.head(20))
-
-        print("\n--- Unlinked metrics rows (company_id not found in companies) ---")
-        df_unlinked_metrics = find_unlinked_metrics(conn, limit=200)
-        print(f"Found {len(df_unlinked_metrics)} rows (showing up to 200):")
-        print(df_unlinked_metrics.head(20))
-
-        print("\n--- Are there company_id values equal to companies.contract_code? (candidate for 'contract_code stored in company_id') ---")
-        cand = candidate_contractcode_in_companyid(conn, limit=200)
-        print(cand.head(30))
-        print("Count candidates:", len(cand))
-
-        print("\n--- Date examples (daily_data vs metrics) ---")
-        pprint(check_date_alignment(conn))
-
-        print("\n--- Join counts (exact date & company_id matches) ---")
-        pprint(count_joined_pairs(conn))
-
-        print("\n--- Examples: daily rows without metrics and metrics without daily rows ---")
-        a, b = detailed_mismatch_examples(conn, limit=200)
-        print("daily without metrics (sample):")
-        print(a.head(20))
-        print("metrics without daily (sample):")
-        print(b.head(20))
-
-        # Вернем словарь с данными для дальнейшей автоматизированной обработки
-        return {
-            "counts": get_counts(conn),
-            "unlinked_daily_count": len(df_unlinked_daily),
-            "unlinked_metrics_count": len(df_unlinked_metrics),
-            "candidate_companyid_contractcode": cand.head(50).to_dict('records'),
-            "exact_join_count": count_joined_pairs(conn)['exact_matches'],
-            "sample_unlinked_daily": df_unlinked_daily.head(20).to_dict('records'),
-            "sample_unlinked_metrics": df_unlinked_metrics.head(20).to_dict('records'),
-        }
-
-    finally:
-        conn.close()
-
 def main():
-    # Работа с DB через модуль database
-    conn = database.get_connection()
-    database.create_tables(conn)
-    import pathlib, os
-    from database import DB_PATH
-    # db_health_check(conn)
-    res = run_all_checks()  # можно передать путь: run_all_checks("/mount/src/stocks/stock_data.db")
-    print("\n--- Summary ---")
-    print(res)
-
-    st.sidebar.write("DB path:", DB_PATH)
+    # Откроем соединение с БД (поддерживаем несколько имен функции в модуле database)
     try:
-        st.sidebar.write("DB size (bytes):", os.path.getsize(DB_PATH))
-    except Exception:
-        st.sidebar.write("DB: не найден или ещё не создан")
+        conn = open_database_connection()
+    except Exception as e:
+        st.error(f"Не удалось открыть БД: {e}")
+        return
 
-    # Кнопка — скачать копию БД (опционально)
-    db_path_obj = pathlib.Path(DB_PATH)
-    if db_path_obj.exists():
-        with open(db_path_obj, "rb") as f:
-            st.sidebar.download_button("Скачать копию БД", f, file_name=db_path_obj.name)
+    # Создаём таблицы (если есть функция)
+    try:
+        if hasattr(database, "create_tables"):
+            database.create_tables(conn)
+    except Exception as e:
+        logger.exception("Ошибка при create_tables: %s", e)
+
+    # Показ информации о БД в sidebar
+    try:
+        from database import DB_PATH
+        st.sidebar.write("DB path:", DB_PATH)
+        try:
+            st.sidebar.write("DB size (bytes):", os.path.getsize(DB_PATH))
+        except Exception:
+            st.sidebar.write("DB: не найден или ещё не создан")
+    except Exception:
+        # если DB_PATH отсутствует — просто игнорируем
+        pass
 
     # безопасное получение ключа
     api_key = st.secrets.get("TINKOFF_API_KEY") or st.secrets.get("tinkoff", {}).get("api_key") or os.getenv("TINKOFF_API_KEY")
@@ -667,13 +582,15 @@ def main():
     analyzer = StockAnalyzer(api_key, db_conn=conn)
 
     st.sidebar.header("Навигация")
-    navigation = st.sidebar.radio("Перейти к", ["Главная", "Обновление данных", "Графики"])
+    navigation = st.sidebar.radio("Перейти к", ["Главная", "Обновление данных", "Графики", "DB health"])
     if navigation == "Главная":
         main_page(conn, analyzer, api_key)
     elif navigation == "Обновление данных":
         update_data_page(conn, analyzer)
     elif navigation == "Графики":
         charts_page(conn)
+    elif navigation == "DB health":
+        db_health_check(conn)
 
     try:
         st.sidebar.bar_chart(countPosition(conn))
