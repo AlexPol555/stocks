@@ -23,12 +23,30 @@ st.title("🧰 Deep Debug")
 ROOT = Path(__file__).resolve().parents[1]
 st.write("ROOT =", ROOT)
 
-targets = ["database.py","stock_analyzer.py","populate_database.py","indicators.py","visualization.py","auto_update.py","orders.py","scheduler.py","data_loader.py"]
+targets = [
+    "core/database.py",
+    "core/analyzer.py",
+    "core/populate.py",
+    "core/indicators/__init__.py",
+    "core/visualization.py",
+    "core/jobs/auto_update.py",
+    "core/orders/service.py",
+    "core/data_loader.py",
+]
 for name in targets:
     st.write(f"{name} exists @ ROOT:", (ROOT / name).exists())
 
 st.subheader("Import check")
-modules = ["database","stock_analyzer","populate_database","indicators","visualization","auto_update","orders","scheduler","data_loader"]
+modules = [
+    "core.database",
+    "core.analyzer",
+    "core.populate",
+    "core.indicators",
+    "core.visualization",
+    "core.jobs.auto_update",
+    "core.orders.service",
+    "core.data_loader",
+]
 for m in modules:
     spec = importlib.util.find_spec(m)
     st.write(f"{m:>20}: ", "OK" if spec else "NOT FOUND")

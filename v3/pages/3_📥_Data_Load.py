@@ -16,10 +16,11 @@ def _add_paths():
 _add_paths()
 # -----
 
-import streamlit as st
 import pandas as pd
-from populate_database import bulk_populate_database_from_csv, incremental_populate_database_from_csv
-from core.utils import run_api_update_job
+import streamlit as st
+
+from core.populate import bulk_populate_database_from_csv, incremental_populate_database_from_csv
+from core.utils import open_database_connection, run_api_update_job
 
 st.title("📥 Data Load")
 
@@ -36,6 +37,7 @@ if update_mode == "CSV Upload":
         st.session_state.csv_data = uploaded_file
 
     if st.session_state.csv_data is not None:
+        conn = None
         try:
             st.session_state.csv_data.seek(0)
             df_csv = pd.read_csv(st.session_state.csv_data, encoding="utf-8-sig")
@@ -44,14 +46,18 @@ if update_mode == "CSV Upload":
             st.write("Preview:", df_csv.head())
             st.write("Shape:", df_csv.shape)
             st.session_state.csv_data.seek(0)
+            conn = open_database_connection()
             if csv_upload_mode == "Bulk":
-                bulk_populate_database_from_csv(st.session_state.csv_data, None)
+                bulk_populate_database_from_csv(st.session_state.csv_data, conn)
                 st.success("Bulk upload done!")
             else:
-                incremental_populate_database_from_csv(st.session_state.csv_data, None)
+                incremental_populate_database_from_csv(st.session_state.csv_data, conn)
                 st.success("Incremental upload done!")
         except Exception as e:
             st.error(f"CSV error: {e}")
+        finally:
+            if conn is not None:
+                conn.close()
     else:
         st.info("Upload a CSV file.")
 

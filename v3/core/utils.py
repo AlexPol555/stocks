@@ -1,11 +1,14 @@
-import os, sqlite3, logging
+import logging
+import os
+import sqlite3
 from typing import Any, Dict, Optional
-import streamlit as st
-import pandas as pd
 
-import database
-from stock_analyzer import StockAnalyzer
-from auto_update import auto_update_all_tickers
+import pandas as pd
+import streamlit as st
+
+from . import database
+from .analyzer import StockAnalyzer
+from .jobs.auto_update import auto_update_all_tickers
 
 logger = logging.getLogger(__name__)
 
