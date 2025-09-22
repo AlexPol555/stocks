@@ -112,11 +112,7 @@ def calculate_technical_indicators(data: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=True)
-def get_calculated_data(_conn) -> pd.DataFrame:
-    import core.database as database
 
-    try:
-        merge_data = database.mergeMetrDaily(_conn)
     except Exception as exc:
         st.warning(f"Ошибка при вызове mergeMetrDaily: {exc}")
         return pd.DataFrame()
