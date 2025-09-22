@@ -127,7 +127,7 @@ def plot_stock_analysis(data, stock_code):
         return fig
     else:
         # fallback: несколько таблиц / простых line_chart
-        st.write(f"Aнализ позиций для {stock_code} — упрощённый режим (без matplotlib)")
+        st.write(f"Анализ позиций для {stock_code} — упрощённый режим (без matplotlib)")
         try:
             st.line_chart(stock_data.set_index('date')[['value1','value4']])
             st.line_chart(stock_data.set_index('date')[['value2','value3']])
