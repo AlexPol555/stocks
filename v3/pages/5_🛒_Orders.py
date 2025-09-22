@@ -17,7 +17,10 @@ _add_paths()
 # -----
 
 import streamlit as st
-from orders import create_order
+
+from core.analyzer import StockAnalyzer
+from core.orders.service import create_order
+from core.utils import open_database_connection, read_api_key
 
 st.title("🛒 Orders")
 
@@ -28,8 +31,26 @@ with col3: qty = st.number_input("Qty", 1, 1000, 10)
 with col4: price = st.number_input("Price", 0.0, step=0.01)
 
 if st.button("Create Order"):
+    conn = None
     try:
-        order = create_order(ticker, side, int(qty), float(price))
-        st.success(f"Created: {order}")
+        conn = open_database_connection()
+        analyzer = StockAnalyzer(read_api_key(), db_conn=conn)
+        order = create_order(
+            ticker=ticker,
+            volume=int(qty),
+            order_price=float(price),
+            order_direction=side,
+            analyzer=analyzer,
+        )
+        if order.get("status") == "success":
+            st.success(order.get("message"))
+        elif order.get("status") == "skipped":
+            st.info(order.get("message"))
+        else:
+            st.warning(order.get("message"))
+        st.json(order)
     except Exception as e:
         st.error(f"Error: {e}")
+    finally:
+        if conn is not None:
+            conn.close()
