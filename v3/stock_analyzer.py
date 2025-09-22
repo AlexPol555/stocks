@@ -93,6 +93,74 @@ class StockAnalyzer:
         except Exception as e:
             logger.exception("Не удалось получить FIGI из БД: %s", e)
             return {}
+   
+    def get_stock_data(self, figi: str) -> pd.DataFrame:
+        """
+        Возвращает DataFrame с историческими свечами для FIGI.
+        Логика:
+          1) Если Tinkoff SDK доступен и есть api_key — запрашиваем candles через SDK.
+          2) Если SDK недоступен или нет api_key — пытаемся прочитать свечи из local DB (companies.figi -> daily_data).
+        Возвращаемые колонки: ['time', 'open', 'close', 'high', 'low', 'volume']
+        """
+        if not figi:
+            logger.warning("get_stock_data: figi пустой, возвращаю пустой DataFrame.")
+            return pd.DataFrame(columns=['time', 'open', 'close', 'high', 'low', 'volume'])
+
+        # 1) Попытка через SDK (если доступен)
+        try:
+            if TINKOFF_AVAILABLE and self.api_key:
+                with Client(self.api_key) as client:
+                    market_data = client.market_data
+                    to_date = datetime.now(timezone.utc)
+                    from_date = to_date - timedelta(days=365)
+                    res = market_data.get_candles(
+                        figi=figi,
+                        from_=from_date,
+                        to=to_date,
+                        interval=CandleInterval.CANDLE_INTERVAL_DAY
+                    )
+                    candles = getattr(res, "candles", None) or []
+                    if not candles:
+                        logger.info("Tinkoff API вернул пустой список свечей для FIGI %s", figi)
+                        # fallthrough to DB fallback below
+                    else:
+                        data = pd.DataFrame([{
+                            "time": candle.time,
+                            "open": quotation_to_decimal(candle.open),
+                            "close": quotation_to_decimal(candle.close),
+                            "high": quotation_to_decimal(candle.high),
+                            "low": quotation_to_decimal(candle.low),
+                            "volume": candle.volume
+                        } for candle in candles])
+                        data['time'] = pd.to_datetime(data['time'])
+                        data.sort_values(by='time', inplace=True)
+                        return data[['time', 'open', 'close', 'high', 'low', 'volume']]
+        except Exception as e:
+            logger.exception("Ошибка при получении свечей через Tinkoff API: %s", e)
+            # продолжим к попытке чтения из БД
+
+        # 2) Fallback: чтение из локальной БД по figi -> daily_data
+        if getattr(self, "db_conn", None):
+            try:
+                query = """
+                SELECT dd.date as time, dd.open, dd.close, dd.high, dd.low, dd.volume
+                FROM daily_data dd
+                JOIN companies c ON dd.company_id = c.id
+                WHERE c.figi = ?
+                ORDER BY dd.date ASC
+                """
+                df = pd.read_sql_query(query, self.db_conn, params=(figi,))
+                if df.empty:
+                    logger.info("Fallback: нет данных в daily_data для FIGI %s", figi)
+                    return pd.DataFrame(columns=['time', 'open', 'close', 'high', 'low', 'volume'])
+                df['time'] = pd.to_datetime(df['time'])
+                return df[['time', 'open', 'close', 'high', 'low', 'volume']]
+            except Exception as ex:
+                logger.exception("Ошибка чтения свечей из БД: %s", ex)
+
+        # Ничего не найдено — пустой DataFrame
+        return pd.DataFrame(columns=['time', 'open', 'close', 'high', 'low', 'volume'])
+
 
     @staticmethod
     def get_technical_indicators(ticker_uid, from_date, to_date, token):
@@ -124,39 +192,7 @@ class StockAnalyzer:
         except Exception as e:
             logger.error(f"Ошибка при вызове GetTechAnalysis: {e}")
             return {}
+        
+
+
         # stock_analyzer.py — ДОБАВИТЬ ВНУТРЬ КЛАССА StockAnalyzer
-    def get_stock_data(self, ticker: str, start_date=None, end_date=None, timeframe: str = "1d"):
-    """
-    Совместимость со старым кодом: вернуть OHLCV для тикера.
-    Пытаемся делегировать в существующие методы/модули.
-    Ожидается pandas.DataFrame с колонками: ['date','open','high','low','close','volume'] (или аналог).
-    """
-    # 1) Если внутри класса уже есть «правильный» метод — используем его
-    for candidate in ("get_price_history", "load_price_history", "load_stock_data", "fetch_stock_data"):
-        if hasattr(self, candidate):
-            return getattr(self, candidate)(ticker, start_date, end_date, timeframe)
-
-    # 2) Через data_loader, если он за это отвечает
-    try:
-        import data_loader
-        for candidate in ("get_stock_data", "fetch_stock_data", "load_price_history", "load_stock_data"):
-            if hasattr(data_loader, candidate):
-                return getattr(data_loader, candidate)(ticker, start_date, end_date, timeframe)
-    except Exception:
-        pass
-
-    # 3) Через database, если там есть удобная обёртка
-    try:
-        import database
-        for candidate in ("get_price_history", "read_price_history", "get_ohlcv", "read_ohlcv"):
-            if hasattr(database, candidate):
-                return getattr(database, candidate)(ticker, start_date, end_date, timeframe)
-    except Exception:
-        pass
-
-    # 4) Если ничего не нашлось — сообщаем явно
-    raise NotImplementedError(
-        "StockAnalyzer.get_stock_data не нашёл базовый метод получения OHLCV. "
-        "Проверь названия функций в data_loader/database и добавь сюда в список кандидатов."
-    )
-
