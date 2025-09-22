@@ -16,21 +16,39 @@ def _add_paths():
 _add_paths()
 # -----
 
-import streamlit as st
 import pandas as pd
-from stock_analyzer import StockAnalyzer
-from visualization import plot_stock_analysis
+import streamlit as st
+
+from core import database
+from core.indicators import calculate_technical_indicators
+from core.utils import open_database_connection
 
 st.title("🧮 Analyzer")
 
-ticker = st.text_input("Ticker", value="SBER")
-if st.button("Analyze"):
-    idx = pd.date_range("2024-01-01", periods=200, freq="D")
-    df = pd.DataFrame({"Close": range(200)}, index=idx)
-    analyzer = StockAnalyzer("")
-    out = analyzer.analyze(df)
-    st.dataframe(out.tail())
-    try:
-        st.pyplot(plot_stock_analysis(out, title=ticker))
-    except Exception:
-        st.line_chart(out["Close"])
+conn = open_database_connection()
+source = database.mergeMetrDaily(conn)
+
+if source.empty:
+    st.warning("В базе нет данных для анализа. Загрузите котировки на странице Data Load.")
+    st.stop()
+
+tickers = sorted(source["contract_code"].dropna().unique())
+selected_ticker = st.selectbox("Тикер", tickers)
+
+ticker_data = source[source["contract_code"] == selected_ticker].copy()
+if ticker_data.empty:
+    st.info("Для выбранного тикера нет строк.")
+    st.stop()
+
+ticker_data["date"] = pd.to_datetime(ticker_data["date"])
+calculated = calculate_technical_indicators(ticker_data)
+
+st.subheader("Последние значения индикаторов")
+st.dataframe(calculated.sort_values("date").tail(30), use_container_width=True)
+
+st.subheader("RSI / ATR динамика")
+metrics = calculated.set_index("date")[["RSI", "ATR"]].dropna()
+if metrics.empty:
+    st.info("Недостаточно данных для построения графиков.")
+else:
+    st.line_chart(metrics)

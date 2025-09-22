@@ -20,10 +20,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-import database
-from indicators import get_calculated_data, clear_get_calculated_data
-from visualization import plot_daily_analysis, plot_stock_analysis
+from core import database
+from core.indicators import clear_get_calculated_data, get_calculated_data
 from core.utils import extract_selected_rows
+from core.visualization import plot_daily_analysis, plot_stock_analysis
 
 st.title("📊 Dashboard")
 
