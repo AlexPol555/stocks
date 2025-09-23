@@ -29,7 +29,7 @@ st.title("📊 Dashboard")
 
 # AgGrid guard
 try:
-    from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
+    from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode, JsCode
 except Exception:
     def AgGrid(df, gridOptions=None, height=400, fit_columns_on_grid_load=True, **kwargs):
         st.dataframe(df, use_container_width=True, height=height)
@@ -39,10 +39,14 @@ except Exception:
         @staticmethod
         def from_dataframe(df): return GridOptionsBuilder(df)
         def configure_selection(self, **kwargs): return self
+        def configure_pagination(self, **kwargs): return self
+        def configure_default_column(self, **kwargs): return self
+        def configure_column(self, *args, **kwargs): return self
         def build(self): return self._opts
     class _Enum: pass
     GridUpdateMode = _Enum(); GridUpdateMode.SELECTION_CHANGED = None
     DataReturnMode = _Enum(); DataReturnMode.FILTERED_AND_SORTED = None
+    def JsCode(x): return x
 
 # DB connect
 conn = None
@@ -58,7 +62,6 @@ if not conn:
     st.stop()
 
 df_all = get_calculated_data(conn)
-st.button("Очистить кэш индикаторов", on_click=clear_get_calculated_data)
 
 if df_all is None or df_all.empty:
     st.info("Нет данных."); st.stop()
@@ -96,21 +99,75 @@ if new_adaptive_sell and 'New_Adaptive_Sell_Signal' in filtered_df.columns:
 if mask.any():
     filtered_df = filtered_df[mask]
 
-# Таблица
-gb = GridOptionsBuilder.from_dataframe(filtered_df)
+# Таблица (минималистичный вид, сортировка по дате, пагинация)
+display_columns = [
+    "date",
+    "contract_code",
+    "close",
+    "RSI",
+    "ATR",
+    "Signal",
+    "Adaptive_Buy_Signal",
+    "Adaptive_Sell_Signal",
+    "New_Adaptive_Buy_Signal",
+    "New_Adaptive_Sell_Signal",
+]
+present_columns = [c for c in display_columns if c in filtered_df.columns]
+df_display = filtered_df[present_columns].copy()
+if "date" in df_display.columns:
+    try:
+        df_display["date"] = pd.to_datetime(df_display["date"]).dt.date
+        df_display = df_display.sort_values("date", ascending=False)
+    except Exception:
+        pass
+df_display = df_display.drop_duplicates()
+
+gb = GridOptionsBuilder.from_dataframe(df_display)
 try:
     gb.configure_selection(selection_mode="single", use_checkbox=False)
+    gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=25)
+    gb.configure_default_column(groupable=False, filter=True, resizable=True, sortable=True)
+    # Заголовки без переименования колонок в DataFrame
+    headers = {
+        "date": "Дата",
+        "contract_code": "Тикер",
+        "close": "Цена",
+        "RSI": "RSI",
+        "ATR": "ATR",
+        "Signal": "Базовый сигнал",
+        "Adaptive_Buy_Signal": "Adaptive Buy",
+        "Adaptive_Sell_Signal": "Adaptive Sell",
+        "New_Adaptive_Buy_Signal": "New Adaptive Buy",
+        "New_Adaptive_Sell_Signal": "New Adaptive Sell",
+    }
+    for key, title in headers.items():
+        if key in df_display.columns:
+            if key in ("close", "RSI", "ATR"):
+                gb.configure_column(key, headerName=title, type=["numericColumn", "numberColumnFilter"], valueFormatter=JsCode("""function(params){
+                    if(params.value === null || params.value === undefined) return '-';
+                    var v = Number(params.value); return isNaN(v)? String(params.value): v.toFixed(2);
+                }"""))
+            else:
+                gb.configure_column(key, headerName=title)
+    # Подсветка сигналов
+    highlight_js = JsCode("""function(params){
+        if(params.value === 1){ return {backgroundColor:'#dcfce7', color:'#166534', fontWeight:'600'}; }
+        if(params.value === -1){ return {backgroundColor:'#fee2e2', color:'#991b1b', fontWeight:'600'}; }
+        return {};
+    }""")
+    for col in [c for c in ["Signal","Adaptive_Buy_Signal","Adaptive_Sell_Signal","New_Adaptive_Buy_Signal","New_Adaptive_Sell_Signal"] if c in df_display.columns]:
+        gb.configure_column(col, cellStyle=highlight_js, width=140)
     gridOptions = gb.build()
 except Exception:
     gridOptions = {}
 
-filtered_df = filtered_df.drop_duplicates()
 grid_response = AgGrid(
-    filtered_df,
+    df_display,
     gridOptions=gridOptions,
     data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
     update_mode=GridUpdateMode.SELECTION_CHANGED,
     theme="alpine",
+    allow_unsafe_jscode=True,
     height=520,
 )
 
@@ -233,5 +290,6 @@ df_signals['Profit_Adaptive_Sell'] = np.where(df_signals.get('Adaptive_Sell_Sign
 df_signals['Profit_New_Adaptive_Buy'] = np.where(df_signals.get('New_Adaptive_Buy_Signal', 0) == 1, df_signals.get('Dynamic_Profit_New_Adaptive_Buy', 0), 0)
 df_signals['Profit_New_Adaptive_Sell'] = np.where(df_signals.get('New_Adaptive_Sell_Signal', 0) == 1, df_signals.get('Dynamic_Profit_New_Adaptive_Sell', 0), 0)
 
+st.button("Очистить кэш индикаторов", on_click=clear_get_calculated_data)
 st.markdown("## Сводка по тикерам")
 st.write(df_signals.groupby('contract_code').sum(numeric_only=True).reset_index())
