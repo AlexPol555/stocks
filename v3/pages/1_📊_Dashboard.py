@@ -141,9 +141,22 @@ if selected is not None:
     if data.empty:
         st.error("Нет данных для графика.")
     else:
-        filtered_df_full = data[data['contract_code'] == selected_ticker]
-        filtered_df_1 = filtered_df_full[filtered_df_full["metric_type"] == "Изменение"]
-        filtered_df_2 = filtered_df_full[filtered_df_full["metric_type"] == "Открытые позиции"]
+        filtered_df_full = data[data['contract_code'] == selected_ticker].copy()
+        # сортировка по дате: новые сначала, показывать только последние 10 строк
+        try:
+            filtered_df_full["date"] = pd.to_datetime(filtered_df_full["date"])  # безопасно для ISO дат
+        except Exception:
+            pass
+        filtered_df_1 = (
+            filtered_df_full[filtered_df_full["metric_type"] == "Изменение"]
+            .sort_values("date", ascending=False)
+            .head(10)
+        )
+        filtered_df_2 = (
+            filtered_df_full[filtered_df_full["metric_type"] == "Открытые позиции"]
+            .sort_values("date", ascending=False)
+            .head(10)
+        )
         colL, colR = st.columns(2)
         with colL: st.dataframe(filtered_df_1, use_container_width=True)
         with colR: st.dataframe(filtered_df_2, use_container_width=True)
@@ -151,22 +164,41 @@ if selected is not None:
     left_col, right_col = st.columns(2)
     with left_col:
         st.markdown("## Информация о заявке")
-        st.write(f"**Тикер:** {selected.get('contract_code')}")
-        st.write(f"**Дата:** {selected.get('date')}")
-        st.write(f"**Цена закрытия:** {selected.get('close')}")
-        st.write(f"**RSI:** {selected.get('RSI', 'N/A')}")
-        st.write(f"**ATR:** {selected.get('ATR', 'N/A')}")
-        st.write(f"**Final_Buy_Signal:** {selected.get('Final_Buy_Signal', 'N/A')}")
 
-        triggered = []
-        if selected.get('Signal') == 1: triggered.append("Базовый Buy")
-        elif selected.get('Signal') == -1: triggered.append("Базовый Sell")
-        if selected.get('Adaptive_Buy_Signal') == 1: triggered.append("Adaptive Buy")
-        elif selected.get('Adaptive_Sell_Signal') == 1: triggered.append("Adaptive Sell")
-        if selected.get('New_Adaptive_Buy_Signal') == 1: triggered.append("New Adaptive Buy")
-        elif selected.get('New_Adaptive_Sell_Signal') == 1: triggered.append("New Adaptive Sell")
-        st.write(f"**Сработавший сигнал:** {', '.join(triggered) if triggered else 'Нет'}")
+        # Верхняя панель метрик
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Тикер", selected.get("contract_code", "-"))
+        m2.metric("Дата", str(selected.get("date", "-")))
+        m3.metric("Цена закрытия", f"{selected.get('close', 'N/A')}")
 
+        m4, m5, m6 = st.columns(3)
+        rsi_val = selected.get("RSI")
+        atr_val = selected.get("ATR")
+        fbs = selected.get("Final_Buy_Signal", "N/A")
+        m4.metric("RSI", "N/A" if pd.isna(rsi_val) else f"{rsi_val:.2f}" if isinstance(rsi_val, (int, float)) else str(rsi_val))
+        m5.metric("ATR", "N/A" if pd.isna(atr_val) else f"{atr_val:.2f}" if isinstance(atr_val, (int, float)) else str(atr_val))
+        m6.metric("Final Buy Signal", str(fbs))
+
+        # Бейджи сигналов
+        chips = []
+        if selected.get('Signal') == 1: chips.append(("Базовый Buy", "#16a34a"))
+        elif selected.get('Signal') == -1: chips.append(("Базовый Sell", "#dc2626"))
+        if selected.get('Adaptive_Buy_Signal') == 1: chips.append(("Adaptive Buy", "#0ea5e9"))
+        elif selected.get('Adaptive_Sell_Signal') == 1: chips.append(("Adaptive Sell", "#f59e0b"))
+        if selected.get('New_Adaptive_Buy_Signal') == 1: chips.append(("New Adaptive Buy", "#8b5cf6"))
+        elif selected.get('New_Adaptive_Sell_Signal') == 1: chips.append(("New Adaptive Sell", "#a16207"))
+
+        if chips:
+            html = " ".join([
+                f"<span style='background:{color};color:white;padding:3px 8px;border-radius:12px;margin-right:6px;font-size:12px;'>{txt}</span>"
+                for txt, color in chips
+            ])
+            st.markdown(f"Сигналы: {html}", unsafe_allow_html=True)
+        else:
+            st.info("Сигналы не сработали для этой строки.")
+
+        # Краткая таблица по профиту/выходам для сработавших сигналов
+        rows = []
         for label, flag, pcol, dcol, ecol in [
             ("Adaptive Buy", selected.get('Adaptive_Buy_Signal') == 1, 'Dynamic_Profit_Adaptive_Buy', 'Exit_Date_Adaptive_Buy', 'Exit_Price_Adaptive_Buy'),
             ("Adaptive Sell", selected.get('Adaptive_Sell_Signal') == 1, 'Dynamic_Profit_Adaptive_Sell', 'Exit_Date_Adaptive_Sell', 'Exit_Price_Adaptive_Sell'),
@@ -174,9 +206,17 @@ if selected is not None:
             ("New Adaptive Sell", selected.get('New_Adaptive_Sell_Signal') == 1, 'Dynamic_Profit_New_Adaptive_Sell', 'Exit_Date_New_Adaptive_Sell', 'Exit_Price_New_Adaptive_Sell'),
         ]:
             if flag:
-                st.write(f"**Dynamic Profit ({label}):** {selected.get(pcol, 'N/A')}")
-                st.write(f"**Exit Date ({label}):** {selected.get(dcol, 'N/A')}")
-                st.write(f"**Exit Price ({label}):** {selected.get(ecol, 'N/A')}")
+                rows.append({
+                    "Сигнал": label,
+                    "Dynamic Profit": selected.get(pcol, 'N/A'),
+                    "Exit Date": selected.get(dcol, 'N/A'),
+                    "Exit Price": selected.get(ecol, 'N/A'),
+                })
+        if rows:
+            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        
+        with st.expander("Показать исходные данные строки"):
+            st.json(selected)
 else:
     st.info("Выбери строку в таблице.")
 
