@@ -112,7 +112,11 @@ def calculate_technical_indicators(data: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=True)
-
+def get_calculated_data(_conn) -> pd.DataFrame:
+    """Загружает данные из БД, считает индикаторы по каждому тикеру и кэширует результат."""
+    try:
+        from core.database import mergeMetrDaily
+        merge_data = mergeMetrDaily(_conn)
     except Exception as exc:
         st.warning(f"Ошибка при вызове mergeMetrDaily: {exc}")
         return pd.DataFrame()

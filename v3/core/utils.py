@@ -9,6 +9,8 @@ import streamlit as st
 from . import database
 from .analyzer import StockAnalyzer
 from .jobs.auto_update import auto_update_all_tickers
+from .parser import run_moex_parser
+from .populate import incremental_populate_database_from_csv
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +80,26 @@ def run_api_update_job(full_update: bool = True):
         return logs
     except Exception as e:
         return [f"Ошибка в run_api_update_job: {e}"]
+
+
+def run_parser_incremental_job():
+    try:
+        conn = open_database_connection()
+        df = run_moex_parser()
+        if df.empty:
+            conn.close()
+            return ["Парсер не вернул данных (df.empty)."]
+        # пишем в БД инкрементально через существующую логику CSV-пайплайна
+        # используем временный CSV через буфер
+        from io import StringIO
+        buffer = StringIO()
+        df.to_csv(buffer, index=False)
+        buffer.seek(0)
+        incremental_populate_database_from_csv(buffer, conn)
+        conn.close()
+        return [f"Импортировано строк: {len(df)}"]
+    except Exception as e:
+        return [f"Ошибка в run_parser_incremental_job: {e}"]
 
 # -------- diagnostics --------
 def db_health_check(conn):

@@ -20,7 +20,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-from core import database
+import core.database as database
 from core.indicators import clear_get_calculated_data, get_calculated_data
 from core.utils import extract_selected_rows
 from core.visualization import plot_daily_analysis, plot_stock_analysis
@@ -46,14 +46,13 @@ except Exception:
 
 # DB connect
 conn = None
-for name in ("get_connection", "get_conn"):
-    if hasattr(database, name):
-        try:
-            conn = getattr(database, name)(); break
-        except TypeError:
-            try:
-                conn = getattr(database, name)(None); break
-            except Exception: pass
+try:
+    conn = database.get_connection()
+except Exception:
+    try:
+        conn = database.get_conn()
+    except Exception:
+        pass
 if not conn:
     st.error("No database connection. Check database.py get_connection/get_conn.")
     st.stop()

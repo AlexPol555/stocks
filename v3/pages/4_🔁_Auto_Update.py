@@ -17,11 +17,11 @@ _add_paths()
 # -----
 
 import streamlit as st
-from core.utils import run_api_update_job
+from core.utils import run_api_update_job, run_parser_incremental_job
 
 st.title("🔁 Auto Update")
 
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 with col1:
     if st.button("Full Update"):
         logs = run_api_update_job(full_update=True)
@@ -31,4 +31,10 @@ with col2:
     if st.button("Incremental Update"):
         logs = run_api_update_job(full_update=False)
         st.success("Incremental update finished")
+        st.write(logs)
+with col3:
+    if st.button("Parse MOEX → Incremental DB"):
+        with st.spinner("Парсим MOEX и пишем в БД (incremental)..."):
+            logs = run_parser_incremental_job()
+        st.success("Parser incremental update finished")
         st.write(logs)
