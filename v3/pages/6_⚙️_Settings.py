@@ -21,6 +21,23 @@ import streamlit as st
 from core import utils
 
 st.title("⚙️ Settings")
+st.subheader("Page visibility")
+default_visibility = {
+    "Debug": True,
+    "Dashboard": True,
+    "Analyzer": True,
+    "Data_Load": True,
+    "Auto_Update": True,
+    "Orders": True,
+}
+vis = st.session_state.get("page_visibility", default_visibility.copy())
+cols = st.columns(3)
+names = list(default_visibility.keys())
+for idx, name in enumerate(names):
+    with cols[idx % 3]:
+        vis[name] = st.checkbox(name.replace("_", " "), value=vis.get(name, True), key=f"vis_{name}")
+st.session_state["page_visibility"] = vis
+
 
 st.subheader("Secrets")
 try:
