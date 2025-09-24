@@ -121,6 +121,47 @@ def create_tables(conn: sqlite3.Connection):
         # логируем не фатально
         logger.exception("Миграция contract_code из company_parameters не выполнена.")
 
+
+    # 7) Demo trading tables
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS demo_accounts (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        balance REAL NOT NULL,
+        initial_balance REAL NOT NULL,
+        currency TEXT DEFAULT 'RUB',
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS demo_positions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        contract_code TEXT NOT NULL UNIQUE,
+        company_id INTEGER,
+        quantity REAL NOT NULL DEFAULT 0,
+        avg_price REAL NOT NULL DEFAULT 0,
+        realized_pl REAL NOT NULL DEFAULT 0,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(company_id) REFERENCES companies(id)
+    );
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS demo_trades (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        contract_code TEXT NOT NULL,
+        company_id INTEGER,
+        side TEXT NOT NULL,
+        quantity REAL NOT NULL,
+        price REAL NOT NULL,
+        value REAL NOT NULL,
+        fee REAL NOT NULL DEFAULT 0,
+        realized_pl REAL NOT NULL DEFAULT 0,
+        executed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(company_id) REFERENCES companies(id)
+    );
+    """)
+
     conn.commit()
 
 def load_data_from_db(conn: sqlite3.Connection) -> pd.DataFrame:
@@ -293,3 +334,39 @@ def mergeMetrDaily(conn: sqlite3.Connection) -> pd.DataFrame:
     except Exception:
         logger.exception("Ошибка при выполнении mergeMetrDaily")
         return pd.DataFrame()
+
+
+def ensure_demo_account(conn: sqlite3.Connection, starting_balance: float = 1_000_000.0) -> None:
+    """Ensure the demo account row exists."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT OR IGNORE INTO demo_accounts (id, balance, initial_balance)
+        VALUES (1, ?, ?)
+        """,
+        (starting_balance, starting_balance),
+    )
+    conn.commit()
+
+
+def get_or_create_company_id(conn: sqlite3.Connection, contract_code: str) -> Optional[int]:
+    """Fetch company id for contract_code; insert placeholder if missing."""
+    if not contract_code:
+        return None
+    normalized = contract_code.strip()
+    if not normalized:
+        return None
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id FROM companies WHERE contract_code = ?",
+        (normalized,),
+    )
+    row = cursor.fetchone()
+    if row:
+        return row[0]
+    cursor.execute(
+        "INSERT INTO companies (contract_code) VALUES (?)",
+        (normalized,),
+    )
+    conn.commit()
+    return cursor.lastrowid

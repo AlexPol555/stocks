@@ -19,8 +19,10 @@ _add_paths()
 import os
 import streamlit as st
 from core import utils
+from core import demo_trading
 
 st.title("⚙️ Settings")
+
 st.subheader("Page visibility")
 default_visibility = {
     "Debug": True,
@@ -37,7 +39,6 @@ for idx, name in enumerate(names):
     with cols[idx % 3]:
         vis[name] = st.checkbox(name.replace("_", " "), value=vis.get(name, True), key=f"vis_{name}")
 st.session_state["page_visibility"] = vis
-
 
 st.subheader("Secrets")
 try:
@@ -63,6 +64,76 @@ try:
     st.write("DB size (bytes):", os.path.getsize(db_path))
 except Exception:
     st.write("DB: not found or not created yet")
+
+st.subheader("Demo счёт")
+conn_demo = None
+try:
+    conn_demo = utils.open_database_connection()
+    snapshot = demo_trading.get_account_snapshot(conn_demo)
+    account_info = demo_trading.get_account(conn_demo)
+    currency = account_info.get("currency", "RUB")
+
+    def _fmt(value: float) -> str:
+        return format(float(value), ',.2f').replace(',', ' ')
+
+    col_a, col_b, col_c, col_d = st.columns(4)
+    col_a.metric("Свободный баланс", f"{_fmt(snapshot['balance'])} {currency}")
+    col_b.metric("Инвестировано", f"{_fmt(snapshot['invested_value'])} {currency}")
+    col_c.metric("Текущая стоимость", f"{_fmt(snapshot['market_value'])} {currency}")
+    col_d.metric("Equity", f"{_fmt(snapshot['equity'])} {currency}")
+
+    col_pl1, col_pl2, col_pl3 = st.columns(3)
+    col_pl1.metric("Нереализ. P/L", f"{_fmt(snapshot['unrealized_pl'])} {currency}")
+    col_pl2.metric("Реализ. P/L", f"{_fmt(snapshot['realized_pl'])} {currency}")
+    col_pl3.metric("Итоговый P/L", f"{_fmt(snapshot['total_pl'])} {currency}")
+    st.caption("Баланс и доходности указаны в валюте счёта.")
+
+    with st.form("demo_balance_adjust"):
+        left, right = st.columns(2)
+        with left:
+            delta = st.number_input("Сумма", min_value=0.0, step=100.0, format="%.2f")
+        with right:
+            action = st.selectbox("Действие", ("Пополнить", "Списать"))
+        submit_adjust = st.form_submit_button("Применить изменение")
+        if submit_adjust:
+            if delta <= 0:
+                st.warning("Введите сумму больше 0.")
+            else:
+                signed = delta if action == "Пополнить" else -delta
+                try:
+                    new_balance = demo_trading.adjust_balance(conn_demo, signed)
+                    st.success(f"Баланс обновлён: {_fmt(new_balance)} {currency}")
+                    st.experimental_rerun()
+                except ValueError as exc:
+                    st.warning(str(exc))
+                except Exception as exc:
+                    st.error(f"Не удалось обновить баланс: {exc}")
+
+    with st.form("demo_reset_account"):
+        new_balance = st.number_input(
+            "Новый стартовый баланс",
+            min_value=0.0,
+            value=float(snapshot['initial_balance']),
+            step=100.0,
+            format="%.2f",
+        )
+        confirm = st.checkbox("Очистить сделки и позиции", value=False)
+        submit_reset = st.form_submit_button("Сбросить счёт")
+        if submit_reset:
+            if not confirm:
+                st.warning("Подтвердите очистку истории, установив галочку.")
+            else:
+                try:
+                    demo_trading.reset_account(conn_demo, new_balance)
+                    st.success("Демо счёт сброшен.")
+                    st.experimental_rerun()
+                except Exception as exc:
+                    st.error(f"Не удалось сбросить счёт: {exc}")
+except Exception as exc:
+    st.warning(f"Demo счёт недоступен: {exc}")
+finally:
+    if conn_demo is not None:
+        conn_demo.close()
 
 st.subheader("DB health")
 try:

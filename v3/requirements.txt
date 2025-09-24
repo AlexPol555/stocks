@@ -3,3 +3,6 @@ pandas
 numpy
 matplotlib
 streamlit-aggrid
+streamlit-lightweight-charts
+lightweight-charts
+pywebview

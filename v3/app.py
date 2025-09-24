@@ -22,6 +22,7 @@ st.sidebar.success("Навигация: выбери страницу слева
 with st.sidebar.expander("Доп. страницы", expanded=False):
 	try:
 		st.page_link("pages/0_🧰_Debug.py", label="Debug")
+		st.page_link("pages/2_🧮_Analyzer", label="Analyzer")
 		st.page_link("pages/3_📥_Data_Load.py", label="Data Load")
 		st.page_link("pages/5_🛒_Orders.py", label="Orders")
 	except Exception:
@@ -33,7 +34,7 @@ st.write("Открой страницу слева: Dashboard, Analyzer, Auto Up
 try:
 	js = """
 	<script>
-	const hideLabels = ["🧰", "📥", "🛒"];
+	const hideLabels = ["🧰", "📥", "🛒", "🧮"];
 	function hide() {
 	  const sb = parent.document.querySelector("section[data-testid='stSidebar']");
 	  if (!sb) { setTimeout(hide, 200); return; }

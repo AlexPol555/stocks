@@ -18,6 +18,7 @@ from .indicators import (
 )
 from .jobs.auto_update import auto_update_all_tickers, normalize_ticker, update_missing_market_data
 from .orders.service import create_order, tinkoff_enabled
+from . import demo_trading
 from .populate import bulk_populate_database_from_csv, incremental_populate_database_from_csv
 from .visualization import (
     plot_daily_analysis,
@@ -53,5 +54,6 @@ __all__ = [
     "safe_plot_matplotlib",
     "tinkoff_enabled",
     "update_missing_market_data",
+    "demo_trading",
     "vectorized_dynamic_profit",
 ]
