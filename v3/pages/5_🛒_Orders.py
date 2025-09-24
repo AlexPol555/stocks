@@ -1,6 +1,7 @@
 # bootstrap
 from pathlib import Path
 import sys
+
 def _add_paths():
     here = Path(__file__).resolve()
     root = here.parents[1]
@@ -18,39 +19,51 @@ _add_paths()
 
 import streamlit as st
 
+from core import ui
 from core.analyzer import StockAnalyzer
 from core.orders.service import create_order
 from core.utils import open_database_connection, read_api_key
 
-st.title("🛒 Orders")
+ui.page_header("Ордеры", "Создание заявок через интеграцию с Tinkoff API.", icon="🛒")
 
-col1, col2, col3, col4 = st.columns(4)
-with col1: ticker = st.text_input("Ticker", "SBER")
-with col2: side = st.selectbox("Side", ["BUY", "SELL"])
-with col3: qty = st.number_input("Qty", 1, 1000, 10)
-with col4: price = st.number_input("Price", 0.0, step=0.01)
+with st.form("order_form"):
+    col_ticker, col_side, col_qty, col_price = st.columns([1.5, 1, 1, 1.5])
+    with col_ticker:
+        ticker = st.text_input("Тикер", value="SBER").upper()
+    with col_side:
+        side = st.selectbox("Направление", ["BUY", "SELL"], index=0)
+    with col_qty:
+        quantity = st.number_input("Количество", min_value=1, max_value=10_000, value=10)
+    with col_price:
+        price = st.number_input("Цена", min_value=0.0, step=0.01)
 
-if st.button("Create Order"):
+    submitted = st.form_submit_button("Создать ордер", type="primary")
+
+if submitted:
     conn = None
     try:
         conn = open_database_connection()
         analyzer = StockAnalyzer(read_api_key(), db_conn=conn)
         order = create_order(
             ticker=ticker,
-            volume=int(qty),
+            volume=int(quantity),
             order_price=float(price),
             order_direction=side,
             analyzer=analyzer,
         )
-        if order.get("status") == "success":
-            st.success(order.get("message"))
-        elif order.get("status") == "skipped":
-            st.info(order.get("message"))
+        status = order.get("status")
+        message = order.get("message", "Нет сообщения от сервиса.")
+        if status == "success":
+            st.success(message)
+        elif status == "skipped":
+            st.info(message)
         else:
-            st.warning(order.get("message"))
+            st.warning(message)
         st.json(order)
-    except Exception as e:
-        st.error(f"Error: {e}")
+    except Exception as exc:
+        st.error(f"Ошибка при отправке ордера: {exc}")
     finally:
         if conn is not None:
             conn.close()
+
+st.caption("API-ключ должен быть настроен в secrets.toml или переменной окружения TINKOFF_API_KEY.")

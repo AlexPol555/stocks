@@ -1,6 +1,7 @@
 # bootstrap
 from pathlib import Path
 import sys
+
 def _add_paths():
     here = Path(__file__).resolve()
     root = here.parents[1]
@@ -17,55 +18,62 @@ _add_paths()
 # -----
 
 import os
+
 import streamlit as st
-from core import utils
-from core import demo_trading
 
-st.title("⚙️ Settings")
+from core import demo_trading, ui, utils
 
-st.subheader("Page visibility")
-default_visibility = {
-    "Debug": True,
-    "Dashboard": True,
-    "Analyzer": True,
-    "Data_Load": True,
-    "Auto_Update": True,
-    "Orders": True,
-}
-vis = st.session_state.get("page_visibility", default_visibility.copy())
+ui.page_header("Настройки", "Управление страницами, интеграциями и демо-счётом.", icon="⚙️")
+
+ui.section_title("Доступность страниц")
+all_pages = [
+    ("Dashboard", "📊 Дашборд"),
+    ("Analyzer", "🧮 Аналитика"),
+    ("Data_Load", "📥 Загрузка"),
+    ("Auto_Update", "🔁 Автообновление"),
+    ("Orders", "🛒 Ордеры"),
+    ("Demo_Stats", "📈 Статистика демо"),
+    ("Lightweight_Chart", "📈 Лёгкие графики"),
+    ("Debug", "🧰 Отладка"),
+]
+
+default_visibility = {key: True for key, _ in all_pages}
+default_visibility["Debug"] = False
+
+visibility = st.session_state.get("page_visibility", default_visibility.copy())
 cols = st.columns(3)
-names = list(default_visibility.keys())
-for idx, name in enumerate(names):
+for idx, (key, label) in enumerate(all_pages):
     with cols[idx % 3]:
-        vis[name] = st.checkbox(name.replace("_", " "), value=vis.get(name, True), key=f"vis_{name}")
-st.session_state["page_visibility"] = vis
+        visibility[key] = st.checkbox(label, value=visibility.get(key, default_visibility[key]))
+st.session_state["page_visibility"] = visibility
+st.caption("Изменения применяются мгновенно к сайдбару приложения.")
 
-st.subheader("Secrets")
+ui.section_title("Интеграции")
 try:
-    sd = utils._secrets_dict()
-    if sd:
-        st.success("secrets.toml found")
-        st.write("Keys:", ", ".join(sd.keys()))
+    secrets = utils._secrets_dict()
+    if secrets:
+        st.success("Файл secrets.toml найден. Ключи:" + ", ".join(secrets.keys()))
     else:
-        st.info("No secrets file (ok if you use ENV).")
-except Exception as e:
-    st.error(f"Secrets error: {e}")
+        st.info("Файл secrets.toml отсутствует — используйте переменные окружения.")
+except Exception as exc:
+    st.error(f"Не удалось прочитать secrets.toml: {exc}")
 
-st.subheader("Environment")
 env_api = os.getenv("TINKOFF_API_KEY")
 env_db = os.getenv("DB_PATH")
-st.write("TINKOFF_API_KEY in ENV:", "yes" if env_api else "no")
-st.write("DB_PATH in ENV:", env_db or "no")
+info_cols = st.columns(2)
+info_cols[0].metric("TINKOFF_API_KEY", "настроен" if env_api else "нет")
+info_cols[1].metric("DB_PATH", env_db or "не задан")
 
-st.subheader("Database")
+ui.section_title("База данных")
 db_path = utils.read_db_path()
-st.write("DB path:", db_path)
+st.write("Путь к базе данных:", db_path)
 try:
-    st.write("DB size (bytes):", os.path.getsize(db_path))
+    db_size = os.path.getsize(db_path)
+    st.write("Размер файла:", f"{db_size / 1024:.1f} КБ")
 except Exception:
-    st.write("DB: not found or not created yet")
+    st.info("Файл базы данных не найден. Он будет создан при первой записи.")
 
-st.subheader("Demo счёт")
+ui.section_title("Демо-счёт")
 conn_demo = None
 try:
     conn_demo = utils.open_database_connection()
@@ -73,72 +81,73 @@ try:
     account_info = demo_trading.get_account(conn_demo)
     currency = account_info.get("currency", "RUB")
 
-    def _fmt(value: float) -> str:
+    def fmt(value: float) -> str:
         return format(float(value), ',.2f').replace(',', ' ')
 
-    col_a, col_b, col_c, col_d = st.columns(4)
-    col_a.metric("Свободный баланс", f"{_fmt(snapshot['balance'])} {currency}")
-    col_b.metric("Инвестировано", f"{_fmt(snapshot['invested_value'])} {currency}")
-    col_c.metric("Текущая стоимость", f"{_fmt(snapshot['market_value'])} {currency}")
-    col_d.metric("Equity", f"{_fmt(snapshot['equity'])} {currency}")
+    top_cols = st.columns(4)
+    top_cols[0].metric("Баланс", f"{fmt(snapshot['balance'])} {currency}")
+    top_cols[1].metric("Инвестировано", f"{fmt(snapshot['invested_value'])} {currency}")
+    top_cols[2].metric("Рыночная стоимость", f"{fmt(snapshot['market_value'])} {currency}")
+    top_cols[3].metric("Equity", f"{fmt(snapshot['equity'])} {currency}")
 
-    col_pl1, col_pl2, col_pl3 = st.columns(3)
-    col_pl1.metric("Нереализ. P/L", f"{_fmt(snapshot['unrealized_pl'])} {currency}")
-    col_pl2.metric("Реализ. P/L", f"{_fmt(snapshot['realized_pl'])} {currency}")
-    col_pl3.metric("Итоговый P/L", f"{_fmt(snapshot['total_pl'])} {currency}")
-    st.caption("Баланс и доходности указаны в валюте счёта.")
+    pl_cols = st.columns(3)
+    pl_cols[0].metric("Нереализованный P/L", f"{fmt(snapshot['unrealized_pl'])} {currency}")
+    pl_cols[1].metric("Реализованный P/L", f"{fmt(snapshot['realized_pl'])} {currency}")
+    pl_cols[2].metric("Итоговый P/L", f"{fmt(snapshot['total_pl'])} {currency}")
 
-    with st.form("demo_balance_adjust"):
-        left, right = st.columns(2)
-        with left:
-            delta = st.number_input("Сумма", min_value=0.0, step=100.0, format="%.2f")
-        with right:
-            action = st.selectbox("Действие", ("Пополнить", "Списать"))
-        submit_adjust = st.form_submit_button("Применить изменение")
-        if submit_adjust:
+    st.caption("Демо-счёт хранится в той же базе, что и исторические данные.")
+
+    with st.form("demo_adjust_balance"):
+        left_col, right_col = st.columns(2)
+        with left_col:
+            delta = st.number_input("Изменение баланса", min_value=0.0, step=100.0, format="%.2f")
+        with right_col:
+            direction = st.selectbox("Действие", ("Пополнить", "Списать"))
+        if st.form_submit_button("Применить"):
             if delta <= 0:
-                st.warning("Введите сумму больше 0.")
+                st.warning("Введите значение больше нуля.")
             else:
-                signed = delta if action == "Пополнить" else -delta
+                sign = 1 if direction == "Пополнить" else -1
                 try:
-                    new_balance = demo_trading.adjust_balance(conn_demo, signed)
-                    st.success(f"Баланс обновлён: {_fmt(new_balance)} {currency}")
-                    st.experimental_rerun()
+                    new_balance = demo_trading.adjust_balance(conn_demo, sign * delta)
                 except ValueError as exc:
                     st.warning(str(exc))
                 except Exception as exc:
                     st.error(f"Не удалось обновить баланс: {exc}")
+                else:
+                    st.success(f"Новый баланс: {fmt(new_balance)} {currency}")
+                    st.experimental_rerun()
 
-    with st.form("demo_reset_account"):
+    with st.form("demo_reset"):
         new_balance = st.number_input(
-            "Новый стартовый баланс",
+            "Начальный баланс",
             min_value=0.0,
             value=float(snapshot['initial_balance']),
             step=100.0,
             format="%.2f",
         )
-        confirm = st.checkbox("Очистить сделки и позиции", value=False)
-        submit_reset = st.form_submit_button("Сбросить счёт")
-        if submit_reset:
+        confirm = st.checkbox("Я понимаю, что текущая история сделок будет очищена")
+        if st.form_submit_button("Сбросить демо-счёт"):
             if not confirm:
-                st.warning("Подтвердите очистку истории, установив галочку.")
+                st.warning("Поставьте подтверждение, если готовы очистить историю сделок.")
             else:
                 try:
                     demo_trading.reset_account(conn_demo, new_balance)
-                    st.success("Демо счёт сброшен.")
-                    st.experimental_rerun()
                 except Exception as exc:
-                    st.error(f"Не удалось сбросить счёт: {exc}")
+                    st.error(f"Не удалось сбросить демо-счёт: {exc}")
+                else:
+                    st.success("Демо-счёт сброшен.")
+                    st.experimental_rerun()
 except Exception as exc:
-    st.warning(f"Demo счёт недоступен: {exc}")
+    st.warning(f"Не удалось получить данные демо-счёта: {exc}")
 finally:
     if conn_demo is not None:
         conn_demo.close()
 
-st.subheader("DB health")
+ui.section_title("Диагностика БД")
 try:
     conn = utils.open_database_connection()
     utils.db_health_check(conn)
     conn.close()
-except Exception as e:
-    st.warning(f"DB check skipped: {e}")
+except Exception as exc:
+    st.warning(f"Проверка БД пропущена: {exc}")

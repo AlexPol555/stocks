@@ -1,6 +1,7 @@
 # bootstrap
 from pathlib import Path
 import sys
+
 def _add_paths():
     here = Path(__file__).resolve()
     root = here.parents[1]
@@ -19,36 +20,48 @@ _add_paths()
 import pandas as pd
 import streamlit as st
 
-from core import database
+from core import database, ui
 from core.indicators import calculate_technical_indicators
 from core.utils import open_database_connection
 
-st.title("🧮 Analyzer")
+ui.page_header("Аналитика", "Просмотр рассчитанных технических индикаторов.", icon="🧮")
 
 conn = open_database_connection()
 source = database.mergeMetrDaily(conn)
 
 if source.empty:
-    st.warning("В базе нет данных для анализа. Загрузите котировки на странице Data Load.")
+    st.warning("В базе нет рассчитанных данных. Загрузите историю и выполните обновление индикаторов.")
     st.stop()
 
+source["date"] = pd.to_datetime(source["date"], errors="coerce")
+source = source.sort_values(["contract_code", "date"])
+
+st.sidebar.markdown("### Тикер")
 tickers = sorted(source["contract_code"].dropna().unique())
-selected_ticker = st.selectbox("Тикер", tickers)
+selected_ticker = st.sidebar.selectbox("Выберите инструмент", options=tickers)
+
+st.sidebar.caption("Набор данных берётся из таблицы metric_daily.")
 
 ticker_data = source[source["contract_code"] == selected_ticker].copy()
 if ticker_data.empty:
-    st.info("Для выбранного тикера нет строк.")
+    st.info("Нет строк для выбранного тикера.")
     st.stop()
 
-ticker_data["date"] = pd.to_datetime(ticker_data["date"])
 calculated = calculate_technical_indicators(ticker_data)
+calculated = calculated.sort_values("date")
 
-st.subheader("Последние значения индикаторов")
-st.dataframe(calculated.sort_values("date").tail(30), use_container_width=True)
+ui.section_title("Последние значения", "30 последних строк")
+st.dataframe(calculated.tail(30), use_container_width=True)
 
-st.subheader("RSI / ATR динамика")
-metrics = calculated.set_index("date")[["RSI", "ATR"]].dropna()
+ui.section_title("RSI и ATR")
+metrics = calculated.set_index("date")[[col for col in ("RSI", "ATR") if col in calculated.columns]].dropna(how="all")
 if metrics.empty:
-    st.info("Недостаточно данных для построения графиков.")
+    st.info("Для выбранного тикера нет данных RSI/ATR.")
 else:
-    st.line_chart(metrics)
+    try:
+        st.line_chart(metrics)
+    except Exception:
+        st.dataframe(metrics.tail(30), use_container_width=True)
+
+ui.section_title("Сырые данные")
+st.dataframe(ticker_data.tail(30), use_container_width=True)

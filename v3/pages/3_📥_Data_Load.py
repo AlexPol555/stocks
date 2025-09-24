@@ -1,6 +1,7 @@
 # bootstrap
 from pathlib import Path
 import sys
+
 def _add_paths():
     here = Path(__file__).resolve()
     root = here.parents[1]
@@ -19,56 +20,65 @@ _add_paths()
 import pandas as pd
 import streamlit as st
 
+from core import ui
 from core.populate import bulk_populate_database_from_csv, incremental_populate_database_from_csv
 from core.utils import open_database_connection, run_api_update_job
 
-st.title("📥 Data Load")
+ui.page_header("Загрузка данных", "Импорт CSV и обновление котировок через API.", icon="📥")
 
-update_mode = st.sidebar.selectbox("Update mode:", ["CSV Upload", "API price"])
+mode = st.radio("Выберите режим", ("CSV-файл", "API котировки"), horizontal=True)
 
-if update_mode == "CSV Upload":
-    csv_upload_mode = st.sidebar.selectbox("Type:", ["Bulk", "Incremental"])
+if mode == "CSV-файл":
+    upload_col, info_col = st.columns([2, 1])
 
-    if "csv_data" not in st.session_state:
-        st.session_state.csv_data = None
+    with upload_col:
+        load_mode = st.selectbox("Тип загрузки", ("Полная загрузка", "Инкрементальная"))
+        st.caption("Полная загрузка очищает таблицы перед импортом, инкрементальная дописывает новые записи.")
+        uploaded = st.file_uploader("Выберите CSV", type="csv")
 
-    uploaded_file = st.file_uploader("Select CSV file", type="csv")
-    if uploaded_file is not None:
-        st.session_state.csv_data = uploaded_file
+        if uploaded is not None:
+            st.write("Размер файла:", f"{uploaded.size / 1024:.1f} КБ")
+            try:
+                uploaded.seek(0)
+                df_csv = pd.read_csv(uploaded, encoding="utf-8-sig")
+                df_csv.columns = df_csv.columns.str.strip()
+                st.dataframe(df_csv.head(), use_container_width=True)
+                st.caption(f"Строк в файле: {df_csv.shape[0]}")
 
-    if st.session_state.csv_data is not None:
-        conn = None
-        try:
-            st.session_state.csv_data.seek(0)
-            df_csv = pd.read_csv(st.session_state.csv_data, encoding="utf-8-sig")
-            df_csv.columns = df_csv.columns.str.strip()
-            st.write("Columns:", df_csv.columns.tolist())
-            st.write("Preview:", df_csv.head())
-            st.write("Shape:", df_csv.shape)
-            st.session_state.csv_data.seek(0)
-            conn = open_database_connection()
-            if csv_upload_mode == "Bulk":
-                bulk_populate_database_from_csv(st.session_state.csv_data, conn)
-                st.success("Bulk upload done!")
+                uploaded.seek(0)
+                conn = open_database_connection()
+                if load_mode == "Полная загрузка":
+                    bulk_populate_database_from_csv(uploaded, conn)
+                    st.success("Полная загрузка завершена.")
+                else:
+                    incremental_populate_database_from_csv(uploaded, conn)
+                    st.success("Инкрементальная загрузка завершена.")
+            except Exception as exc:
+                st.error(f"Ошибка при обработке CSV: {exc}")
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        else:
+            st.info("Загрузите CSV-файл в формате UTF-8 (разделитель запятая).")
+
+    with info_col:
+        st.markdown("**Требования к CSV**")
+        st.markdown("- Обязательные столбцы: date, contract_code, open, high, low, close.\n- Формат даты — ISO (YYYY-MM-DD).\n- Используйте UTF-8 без BOM.")
+else:
+    st.markdown("Запустите обновление цен по тикерам, которые уже есть в базе данных.")
+    api_mode = st.radio("Диапазон обновления", ("Полный период", "Только пропуски"), horizontal=True)
+    full_update = api_mode == "Полный период"
+
+    if st.button("Запустить обновление", type="primary"):
+        with st.spinner("Выполняем запросы к API..."):
+            try:
+                logs = run_api_update_job(full_update=full_update)
+            except Exception as exc:
+                st.error(f"Ошибка при обновлении через API: {exc}")
             else:
-                incremental_populate_database_from_csv(st.session_state.csv_data, conn)
-                st.success("Incremental upload done!")
-        except Exception as e:
-            st.error(f"CSV error: {e}")
-        finally:
-            if conn is not None:
-                conn.close()
-    else:
-        st.info("Upload a CSV file.")
-
-else:  # API price
-    st.write("Update via API for tickers in DB.")
-    api_update_mode = st.radio("Kind:", ["Full", "Only missing (increment)"], horizontal=True)
-    full_update = (api_update_mode == "Full")
-
-    if st.button("Run API update now"):
-        with st.spinner("Running..."):
-            logs = run_api_update_job(full_update=full_update)
-        st.success("Done!")
-        for m in logs:
-            st.write("•", m)
+                st.success("Обновление завершено.")
+                if logs:
+                    st.write("Журнал:")
+                    st.write(logs)

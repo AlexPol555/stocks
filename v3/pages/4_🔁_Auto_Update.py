@@ -1,6 +1,7 @@
 # bootstrap
 from pathlib import Path
 import sys
+
 def _add_paths():
     here = Path(__file__).resolve()
     root = here.parents[1]
@@ -17,24 +18,48 @@ _add_paths()
 # -----
 
 import streamlit as st
+
+from core import ui
 from core.utils import run_api_update_job, run_parser_incremental_job
 
-st.title("🔁 Auto Update")
+ui.page_header("Автообновление", "Пересчёт котировок и парсинг из внешних источников.", icon="🔁")
 
-col1, col2, col3 = st.columns(3)
-with col1:
-    if st.button("Full Update"):
-        logs = run_api_update_job(full_update=True)
-        st.success("Full update finished")
-        st.write(logs)
-with col2:
-    if st.button("Incremental Update"):
-        logs = run_api_update_job(full_update=False)
-        st.success("Incremental update finished")
-        st.write(logs)
-with col3:
-    if st.button("Parse MOEX → Incremental DB"):
-        with st.spinner("Парсим MOEX и пишем в БД (incremental)..."):
-            logs = run_parser_incremental_job()
-        st.success("Parser incremental update finished")
-        st.write(logs)
+col_full, col_increment, col_parser = st.columns(3)
+
+with col_full:
+    if st.button("Полный пересчёт", use_container_width=True):
+        with st.spinner("Получаем данные по всем тикерам..."):
+            try:
+                logs = run_api_update_job(full_update=True)
+            except Exception as exc:
+                st.error(f"Ошибка при полном обновлении: {exc}")
+            else:
+                st.success("Полное обновление завершено.")
+                if logs:
+                    st.write(logs)
+
+with col_increment:
+    if st.button("Дополнить пропуски", use_container_width=True):
+        with st.spinner("Получаем только недостающие бары..."):
+            try:
+                logs = run_api_update_job(full_update=False)
+            except Exception as exc:
+                st.error(f"Ошибка при инкрементальном обновлении: {exc}")
+            else:
+                st.success("Инкрементальное обновление завершено.")
+                if logs:
+                    st.write(logs)
+
+with col_parser:
+    if st.button("Парсер MOEX", use_container_width=True):
+        with st.spinner("Запускаем сбор данных по MOEX..."):
+            try:
+                logs = run_parser_incremental_job()
+            except Exception as exc:
+                st.error(f"Ошибка при парсинге MOEX: {exc}")
+            else:
+                st.success("Инкрементальный парсер MOEX завершил работу.")
+                if logs:
+                    st.write(logs)
+
+st.caption("После обновления переходите на дашборд, чтобы убедиться в свежести сигналов.")

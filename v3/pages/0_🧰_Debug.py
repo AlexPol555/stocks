@@ -1,6 +1,7 @@
 # bootstrap
 from pathlib import Path
 import sys
+
 def _add_paths():
     here = Path(__file__).resolve()
     root = here.parents[1]
@@ -16,14 +17,20 @@ def _add_paths():
 _add_paths()
 # -----
 
-import streamlit as st, importlib.util
+import importlib.util
+from typing import Iterable
 
-st.title("🧰 Deep Debug")
+import streamlit as st
 
-ROOT = Path(__file__).resolve().parents[1]
-st.write("ROOT =", ROOT)
+from core import ui
 
-targets = [
+ui.page_header("Отладка", "Проверка путей, модулей и конфигурации проекта.", icon="🧰")
+
+root = Path(__file__).resolve().parents[1]
+st.write("Корневая директория:", root)
+
+ui.section_title("Проверка ключевых файлов")
+TARGETS = (
     "core/database.py",
     "core/analyzer.py",
     "core/populate.py",
@@ -32,12 +39,14 @@ targets = [
     "core/jobs/auto_update.py",
     "core/orders/service.py",
     "core/data_loader.py",
-]
-for name in targets:
-    st.write(f"{name} exists @ ROOT:", (ROOT / name).exists())
+)
 
-st.subheader("Import check")
-modules = [
+for rel_path in TARGETS:
+    exists = (root / rel_path).exists()
+    st.write(f"{rel_path}:", "✅" if exists else "⚠️ отсутствует")
+
+ui.section_title("Проверка импорта")
+MODULES: Iterable[str] = (
     "core.database",
     "core.analyzer",
     "core.populate",
@@ -46,10 +55,14 @@ modules = [
     "core.jobs.auto_update",
     "core.orders.service",
     "core.data_loader",
-]
-for m in modules:
-    spec = importlib.util.find_spec(m)
-    st.write(f"{m:>20}: ", "OK" if spec else "NOT FOUND")
+)
 
-st.subheader("sys.path (top 10)")
+status_rows = []
+for module_name in MODULES:
+    spec = importlib.util.find_spec(module_name)
+    status_rows.append((module_name, "ОК" if spec else "NOT FOUND"))
+
+st.table(status_rows)
+
+ui.section_title("sys.path первые 10 записей")
 st.code("\n".join(sys.path[:10]), language="text")
