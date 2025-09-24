@@ -1,31 +1,18 @@
-﻿# bootstrap
 from pathlib import Path
-import sys
 
-def _add_paths():
-    here = Path(__file__).resolve()
-    root = here.parents[1]
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
-    for sub in ("core", "services"):
-        ep = root / sub
-        if ep.exists() and str(ep) not in sys.path:
-            sys.path.insert(0, str(ep))
-    parent = root.parent
-    if parent and str(parent) not in sys.path:
-        sys.path.insert(0, str(parent))
-_add_paths()
-# -----
+from core.bootstrap import setup_environment
+
+setup_environment()
+
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 from streamlit_lightweight_charts import renderLightweightCharts  # type: ignore
 
-import core.database as database
-from core import demo_trading, ui
+from core import database, demo_trading, ui
 from core.indicators import clear_get_calculated_data, get_calculated_data
-from core.utils import extract_selected_rows
+from core.utils import extract_selected_rows, open_database_connection, read_db_path
 
 
 def _fmt_money(value) -> str:
@@ -82,20 +69,23 @@ with st.sidebar:
     st.button("Очистить кэш расчётов", on_click=clear_get_calculated_data, use_container_width=True)
 
 
+db_path = Path(read_db_path())
 conn = None
-try:
-    conn = database.get_connection()
-except Exception:
-    try:
-        conn = database.get_conn()
-    except Exception:
-        conn = None
+db_version = None
+if db_path.exists():
+    db_version = str(db_path.stat().st_mtime_ns)
 
-if not conn:
-    st.error("Нет подключения к базе данных. Проверьте настройки в core/database.py.")
+try:
+    conn = open_database_connection()
+except Exception as exc:
+    st.error(f"Не удалось подключиться к базе данных: {exc}")
     st.stop()
 
-df_all = get_calculated_data(conn)
+try:
+    df_all = get_calculated_data(db_path, data_version=db_version)
+except Exception as exc:
+    st.error(f"Ошибка расчета показателей: {exc}")
+    raise
 if df_all is None or df_all.empty:
     st.info("Нет рассчитанных данных. Загрузите историю и выполните обновление индикаторов.")
     st.stop()

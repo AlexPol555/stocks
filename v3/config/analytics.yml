@@ -1,0 +1,245 @@
+﻿# Analytics configuration for adaptive indicators and risk settings
+version: 1
+metadata:
+  generated: 2025-09-24
+  owner: analytics
+
+assets:
+  defaults:
+    asset_class: equities
+    timeframe: daily
+    risk_profile: base
+  items:
+    - contract_code: "SBER"
+      asset_class: equities
+      timeframe: daily
+    - contract_code: "GAZP"
+      asset_class: equities
+      timeframe: daily
+    - pattern: "^BR"
+      asset_class: commodities
+      timeframe: daily
+    - pattern: "^Si"
+      asset_class: futures
+      timeframe: daily
+
+volatility_buckets:
+  equities:
+    atr_pct:
+      low: 0.012
+      high: 0.035
+  commodities:
+    atr_pct:
+      low: 0.015
+      high: 0.045
+  futures:
+    atr_pct:
+      low: 0.02
+      high: 0.06
+  default:
+    atr_pct:
+      low: 0.018
+      high: 0.05
+
+indicator_defaults:
+  sma_fast: 20
+  sma_slow: 100
+  ema_fast: 20
+  ema_slow: 100
+  rsi_period: 14
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+  bollinger_period: 20
+  bollinger_std: 2.0
+  stochastic_period: 14
+  stochastic_signal: 3
+  atr_period: 14
+
+indicator_profiles:
+  equities:
+    daily:
+      low:
+        sma_fast: 21
+        sma_slow: 89
+        ema_fast: 13
+        ema_slow: 55
+        rsi_period: 14
+        macd_fast: 8
+        macd_slow: 21
+        macd_signal: 5
+        bollinger_period: 20
+        bollinger_std: 1.8
+        stochastic_period: 14
+        stochastic_signal: 3
+        atr_period: 14
+      medium:
+        sma_fast: 34
+        sma_slow: 144
+        ema_fast: 21
+        ema_slow: 89
+        rsi_period: 12
+        macd_fast: 8
+        macd_slow: 24
+        macd_signal: 6
+        bollinger_period: 20
+        bollinger_std: 2.1
+        stochastic_period: 14
+        stochastic_signal: 3
+        atr_period: 18
+      high:
+        sma_fast: 55
+        sma_slow: 200
+        ema_fast: 34
+        ema_slow: 144
+        rsi_period: 10
+        macd_fast: 5
+        macd_slow: 35
+        macd_signal: 5
+        bollinger_period: 18
+        bollinger_std: 2.4
+        stochastic_period: 12
+        stochastic_signal: 3
+        atr_period: 21
+  commodities:
+    daily:
+      low:
+        sma_fast: 13
+        sma_slow: 55
+        ema_fast: 13
+        ema_slow: 55
+        rsi_period: 14
+        macd_fast: 8
+        macd_slow: 21
+        macd_signal: 5
+        bollinger_period: 18
+        bollinger_std: 2.0
+        stochastic_period: 14
+        stochastic_signal: 3
+        atr_period: 14
+      medium:
+        sma_fast: 21
+        sma_slow: 89
+        ema_fast: 21
+        ema_slow: 89
+        rsi_period: 13
+        macd_fast: 8
+        macd_slow: 26
+        macd_signal: 6
+        bollinger_period: 20
+        bollinger_std: 2.3
+        stochastic_period: 14
+        stochastic_signal: 3
+        atr_period: 18
+      high:
+        sma_fast: 34
+        sma_slow: 144
+        ema_fast: 34
+        ema_slow: 144
+        rsi_period: 10
+        macd_fast: 5
+        macd_slow: 34
+        macd_signal: 5
+        bollinger_period: 20
+        bollinger_std: 2.6
+        stochastic_period: 13
+        stochastic_signal: 3
+        atr_period: 21
+  futures:
+    daily:
+      low:
+        sma_fast: 13
+        sma_slow: 55
+        ema_fast: 13
+        ema_slow: 55
+        rsi_period: 12
+        macd_fast: 6
+        macd_slow: 21
+        macd_signal: 4
+        bollinger_period: 18
+        bollinger_std: 1.9
+        stochastic_period: 12
+        stochastic_signal: 3
+        atr_period: 14
+      medium:
+        sma_fast: 21
+        sma_slow: 89
+        ema_fast: 21
+        ema_slow: 89
+        rsi_period: 11
+        macd_fast: 5
+        macd_slow: 26
+        macd_signal: 5
+        bollinger_period: 18
+        bollinger_std: 2.3
+        stochastic_period: 12
+        stochastic_signal: 3
+        atr_period: 18
+      high:
+        sma_fast: 34
+        sma_slow: 144
+        ema_fast: 34
+        ema_slow: 144
+        rsi_period: 10
+        macd_fast: 5
+        macd_slow: 35
+        macd_signal: 4
+        bollinger_period: 18
+        bollinger_std: 2.6
+        stochastic_period: 11
+        stochastic_signal: 3
+        atr_period: 21
+risk_profiles:
+  base:
+    defaults:
+      long:
+        atr_stop_multiplier: 2.0
+        atr_target_multiplier: 3.0
+        trailing_stop_multiplier: null
+        max_holding_days: 8
+        risk_per_trade_pct: 0.01
+        position_size_pct: 1.0
+      short:
+        atr_stop_multiplier: 2.2
+        atr_target_multiplier: 3.2
+        trailing_stop_multiplier: null
+        max_holding_days: 6
+        risk_per_trade_pct: 0.01
+        position_size_pct: 1.0
+    equities:
+      daily:
+        medium:
+          long:
+            atr_stop_multiplier: 2.3
+            atr_target_multiplier: 3.6
+            trailing_stop_multiplier: 1.5
+            max_holding_days: 10
+          short:
+            atr_stop_multiplier: 2.5
+            atr_target_multiplier: 3.8
+            trailing_stop_multiplier: 1.7
+            max_holding_days: 8
+        high:
+          long:
+            atr_stop_multiplier: 2.6
+            atr_target_multiplier: 4.2
+            trailing_stop_multiplier: 1.8
+            max_holding_days: 12
+          short:
+            atr_stop_multiplier: 2.8
+            atr_target_multiplier: 4.5
+            trailing_stop_multiplier: 2.0
+            max_holding_days: 9
+    futures:
+      daily:
+        high:
+          long:
+            atr_stop_multiplier: 3.2
+            atr_target_multiplier: 5.0
+            trailing_stop_multiplier: 2.0
+            max_holding_days: 7
+          short:
+            atr_stop_multiplier: 3.5
+            atr_target_multiplier: 5.5
+            trailing_stop_multiplier: 2.2
+            max_holding_days: 6

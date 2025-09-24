@@ -1,12 +1,11 @@
 import logging
-import os
-import sqlite3
 from typing import Any, Dict, Optional
 
 import pandas as pd
 import streamlit as st
 
 from . import database
+from .settings import get_settings
 from .analyzer import StockAnalyzer
 from .jobs.auto_update import auto_update_all_tickers
 from .parser import run_moex_parser
@@ -41,33 +40,18 @@ def read_api_key() -> Optional[str]:
     )
 
 def read_db_path() -> str:
-    return (
-        os.getenv("DB_PATH")
-        or _secret_get("DB_PATH")
-        or getattr(database, "DB_PATH", None)
-        or "stock_data.db"
-    )
+    return str(get_settings().database_path)
 
 # -------- db connection (WAL) --------
 def open_database_connection():
-    for name in ("get_connection", "get_conn"):
-        if hasattr(database, name):
-            try:
-                return getattr(database, name)()
-            except TypeError:
-                try:
-                    return getattr(database, name)(None)
-                except Exception:
-                    pass
-            except Exception:
-                logger.exception("DB factory error via database.%s", name)
-
-    db_path = read_db_path()
-    conn = sqlite3.connect(db_path, check_same_thread=False, isolation_level=None)
-    with conn:
+    settings = get_settings()
+    conn = database.get_connection(settings.database_path)
+    try:
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         conn.execute("PRAGMA foreign_keys=ON;")
+    except Exception:
+        logger.exception("Failed to configure SQLite pragmas")
     return conn
 
 # -------- jobs (manual trigger only) --------

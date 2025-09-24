@@ -6,3 +6,4 @@ streamlit-aggrid
 streamlit-lightweight-charts
 lightweight-charts
 pywebview
+PyYAML

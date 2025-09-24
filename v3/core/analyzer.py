@@ -9,10 +9,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import logging
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 import pandas as pd
-import streamlit as st
 
 logger = logging.getLogger(__name__)
 
@@ -45,21 +44,35 @@ class StockAnalyzer:
     Parameters
     ----------
     api_key:
-        Токен доступа для Tinkoff Invest. Если не задан – используется режим
-        только для чтения из базы данных.
+        РўРѕРєРµРЅ РґРѕСЃС‚СѓРїР° РґР»СЏ Tinkoff Invest. Р•СЃР»Рё РЅРµ Р·Р°РґР°РЅ вЂ“ РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ СЂРµР¶РёРј
+        С‚РѕР»СЊРєРѕ РґР»СЏ С‡С‚РµРЅРёСЏ РёР· Р±Р°Р·С‹ РґР°РЅРЅС‹С….
     db_conn:
-        Активное соединение с SQLite. Используется в качестве источника
-        резервных данных, если API недоступно.
+        РђРєС‚РёРІРЅРѕРµ СЃРѕРµРґРёРЅРµРЅРёРµ СЃ SQLite. РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РІ РєР°С‡РµСЃС‚РІРµ РёСЃС‚РѕС‡РЅРёРєР°
+        СЂРµР·РµСЂРІРЅС‹С… РґР°РЅРЅС‹С…, РµСЃР»Рё API РЅРµРґРѕСЃС‚СѓРїРЅРѕ.
     """
 
     api_key: Optional[str]
     db_conn: Optional[object] = None
+    warn_callback: Optional[Callable[[str], None]] = None
+
+    def _warn(self, message: str) -> None:
+        if callable(self.warn_callback):
+            try:
+                self.warn_callback(message)
+                return
+            except Exception:
+                logger.exception("warn_callback failed")
+        try:
+            import streamlit as st  # type: ignore
+            st.warning(message)
+        except Exception:
+            logger.warning(message)
 
     # ------------------------------------------------------------------ utils
     def _figi_from_db_or_empty(self) -> Dict[str, str]:
         """Attempt to build ticker -> FIGI mapping from the database."""
         if not self.db_conn:
-            logger.info("StockAnalyzer: DB connection not provided – returning empty mapping")
+            logger.info("StockAnalyzer: DB connection not provided вЂ“ returning empty mapping")
             return {}
 
         try:
@@ -77,14 +90,14 @@ class StockAnalyzer:
     def get_figi_mapping(self) -> Dict[str, str]:
         """Return a ticker -> FIGI mapping.
 
-        Priority: online API (when SDK + API key available) → database fallback
-        → empty mapping.
+        Priority: online API (when SDK + API key available) в†’ database fallback
+        в†’ empty mapping.
         """
         if not self.api_key:
-            logger.warning("Tinkoff API key not provided – falling back to DB mapping")
+            logger.warning("Tinkoff API key not provided вЂ“ falling back to DB mapping")
             try:
-                st.warning(
-                    "Tinkoff API key не задан: FIGI будут читаться только из базы данных."
+                self._warn(
+                    "Tinkoff API key РЅРµ Р·Р°РґР°РЅ: FIGI Р±СѓРґСѓС‚ С‡РёС‚Р°С‚СЊСЃСЏ С‚РѕР»СЊРєРѕ РёР· Р±Р°Р·С‹ РґР°РЅРЅС‹С…."
                 )
             except Exception:  # pragma: no cover - streamlit not initialised
                 pass
@@ -95,7 +108,7 @@ class StockAnalyzer:
         except Exception as exc:
             logger.warning("Tinkoff SDK cannot be imported (%s). Using DB fallback.", exc)
             try:
-                st.warning("Tinkoff SDK не установлен. Проверьте requirements.txt.")
+                self._warn("Tinkoff SDK РЅРµ СѓСЃС‚Р°РЅРѕРІР»РµРЅ. РџСЂРѕРІРµСЂСЊС‚Рµ requirements.txt.")
             except Exception:  # pragma: no cover
                 pass
             return self._figi_from_db_or_empty()
@@ -115,7 +128,7 @@ class StockAnalyzer:
         except Exception as exc:
             logger.exception("FIGI fetch via Tinkoff API failed: %s", exc)
             try:
-                st.warning("Ошибка при вызове Tinkoff API. См. логи приложения.")
+                self._warn("РћС€РёР±РєР° РїСЂРё РІС‹Р·РѕРІРµ Tinkoff API. РЎРј. Р»РѕРіРё РїСЂРёР»РѕР¶РµРЅРёСЏ.")
             except Exception:  # pragma: no cover
                 pass
             return self._figi_from_db_or_empty()

@@ -1,4 +1,4 @@
-"""Core package exposing reusable building blocks for the Streamlit app."""
+﻿"""Core package exposing reusable building blocks for the Streamlit app."""
 
 from . import database
 from .analyzer import StockAnalyzer
@@ -39,6 +39,7 @@ __all__ = [
     "clear_get_calculated_data",
     "create_order",
     "database",
+    "demo_trading",
     "generate_adaptive_signals",
     "generate_final_adaptive_signals",
     "generate_new_adaptive_signals",
@@ -54,6 +55,5 @@ __all__ = [
     "safe_plot_matplotlib",
     "tinkoff_enabled",
     "update_missing_market_data",
-    "demo_trading",
     "vectorized_dynamic_profit",
 ]

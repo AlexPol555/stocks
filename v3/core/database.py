@@ -1,28 +1,28 @@
 # database.py (заменить/вставить этим содержимым)
-import os
+from __future__ import annotations
+
+from pathlib import Path
 import sqlite3
 import decimal
 import logging
 import pandas as pd
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
+
+from core.settings import get_settings
 
 sqlite3.register_adapter(decimal.Decimal, float)
 logger = logging.getLogger(__name__)
 
-# Храним файл БД в рабочей директории приложения (Streamlit Cloud)
-DB_FILENAME = os.environ.get("STOCK_DB_FILENAME", "stock_data.db")
-DB_PATH = os.path.join(os.getcwd(), DB_FILENAME)
+# Database paths are resolved via environment variables or core.settings.
 
-def get_connection(db_path: str = None):
-    """
-    Возвращает sqlite3 connection. По умолчанию — рабочая директория приложения.
-    check_same_thread=False полезно для использования в Streamlit.
-    """
-    path = db_path or DB_PATH
-    # Убедимся, что директория существует (для безопасности)
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    conn = sqlite3.connect(path, check_same_thread=False)
+def get_connection(db_path: Optional[Union[str, Path]] = None) -> sqlite3.Connection:
+    """Create a sqlite3 connection using configured project paths."""
+    settings = get_settings()
+    target = Path(db_path).expanduser().resolve() if db_path else settings.database_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(target.as_posix(), check_same_thread=False, isolation_level=None)
     return conn
+
 
 def create_tables(conn: sqlite3.Connection):
     """
@@ -269,7 +269,12 @@ def mergeMetrDaily(conn: sqlite3.Connection) -> pd.DataFrame:
     cursor = conn.cursor()
     query = """
     SELECT 
-        c.contract_code, 
+        COALESCE(c.contract_code, 'UNKNOWN') AS contract_code,
+        CASE
+            WHEN COALESCE(c.contract_code, '') LIKE 'Si%' OR COALESCE(c.contract_code, '') LIKE 'BR%' THEN 'futures'
+            WHEN COALESCE(c.contract_code, '') LIKE '%-F' THEN 'futures'
+            ELSE 'equity'
+        END AS asset_class,
         dd.date,
         dd.open,
         dd.low,
@@ -277,20 +282,20 @@ def mergeMetrDaily(conn: sqlite3.Connection) -> pd.DataFrame:
         dd.close,
         dd.volume,
         
-        op.value1 AS long_fiz_1,
-        op.value2 AS short_fiz_2,
-        op.value3 AS long_jur_3,
-        op.value4 AS short_jur_4,
-        op.value5 AS total_positions,
+        COALESCE(op.value1, 0) AS long_fiz_1,
+        COALESCE(op.value2, 0) AS short_fiz_2,
+        COALESCE(op.value3, 0) AS long_jur_3,
+        COALESCE(op.value4, 0) AS short_jur_4,
+        COALESCE(op.value5, 0) AS total_positions,
         
-        kl.value1 AS count_fiz_1,
-        kl.value2 AS count_fiz_2,
-        kl.value3 AS count_jur_3,
-        kl.value4 AS count_jur_4,
-        kl.value5 AS total_count
+        COALESCE(kl.value1, 0) AS count_fiz_1,
+        COALESCE(kl.value2, 0) AS count_fiz_2,
+        COALESCE(kl.value3, 0) AS count_jur_3,
+        COALESCE(kl.value4, 0) AS count_jur_4,
+        COALESCE(kl.value5, 0) AS total_count
         
     FROM daily_data AS dd
-    JOIN companies AS c 
+    LEFT JOIN companies AS c 
         ON dd.company_id = c.id
         
     LEFT JOIN (
@@ -330,6 +335,10 @@ def mergeMetrDaily(conn: sqlite3.Connection) -> pd.DataFrame:
         columns = [col[0] for col in cursor.description]
         data = cursor.fetchall()
         df = pd.DataFrame(data, columns=columns)
+        if not df.empty:
+            df['contract_code'] = df['contract_code'].fillna('UNKNOWN')
+            if 'asset_class' in df.columns:
+                df['asset_class'] = df['asset_class'].fillna('unknown')
         return df.drop_duplicates()
     except Exception:
         logger.exception("Ошибка при выполнении mergeMetrDaily")

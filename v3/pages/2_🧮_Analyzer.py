@@ -1,21 +1,6 @@
-# bootstrap
-from pathlib import Path
-import sys
+from core.bootstrap import setup_environment
 
-def _add_paths():
-    here = Path(__file__).resolve()
-    root = here.parents[1]
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
-    for sub in ("core", "services"):
-        ep = root / sub
-        if ep.exists() and str(ep) not in sys.path:
-            sys.path.insert(0, str(ep))
-    parent = root.parent
-    if parent and str(parent) not in sys.path:
-        sys.path.insert(0, str(parent))
-_add_paths()
-# -----
+setup_environment()
 
 import pandas as pd
 import streamlit as st
@@ -47,7 +32,7 @@ if ticker_data.empty:
     st.info("Нет строк для выбранного тикера.")
     st.stop()
 
-calculated = calculate_technical_indicators(ticker_data)
+calculated = calculate_technical_indicators(ticker_data, contract_code=selected_ticker)
 calculated = calculated.sort_values("date")
 
 ui.section_title("Последние значения", "30 последних строк")

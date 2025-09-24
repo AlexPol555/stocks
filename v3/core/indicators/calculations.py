@@ -1,46 +1,83 @@
-"""Low level numerical indicator calculations."""
+﻿"""Low level numerical indicator calculations driven by configuration profiles."""
 from __future__ import annotations
+
+from typing import Tuple
 
 import pandas as pd
 
+from core.config import IndicatorParameters
 
-def calculate_basic_indicators(data: pd.DataFrame) -> pd.DataFrame:
+
+SMA_FAST_COL = "SMA_FAST"
+SMA_SLOW_COL = "SMA_SLOW"
+EMA_FAST_COL = "EMA_FAST"
+EMA_SLOW_COL = "EMA_SLOW"
+MACD_COL = "MACD"
+MACD_SIGNAL_COL = "MACD_SIGNAL"
+RSI_COL = "RSI"
+BB_MID_COL = "BB_MIDDLE"
+BB_STD_COL = "BB_STD"
+BB_UPPER_COL = "BB_UPPER"
+BB_LOWER_COL = "BB_LOWER"
+STOCH_K_COL = "STOCHASTIC_K"
+STOCH_D_COL = "STOCHASTIC_D"
+ATR_COL = "ATR"
+
+
+def _resolve_window_columns(params: IndicatorParameters) -> Tuple[str, str, str, str]:
+    return (
+        f"SMA_{params.sma_fast}",
+        f"SMA_{params.sma_slow}",
+        f"EMA_{params.ema_fast}",
+        f"EMA_{params.ema_slow}",
+    )
+
+
+def calculate_basic_indicators(data: pd.DataFrame, params: IndicatorParameters) -> pd.DataFrame:
     epsilon = 1e-9
     data = data.copy()
-    data["SMA_50"] = data["close"].rolling(window=50).mean()
-    data["SMA_200"] = data["close"].rolling(window=200).mean()
-    data["EMA_50"] = data["close"].ewm(span=50, adjust=False).mean()
-    data["EMA_200"] = data["close"].ewm(span=200, adjust=False).mean()
+
+    sma_fast_col, sma_slow_col, ema_fast_col, ema_slow_col = _resolve_window_columns(params)
+    data[sma_fast_col] = data["close"].rolling(window=params.sma_fast, min_periods=1).mean()
+    data[sma_slow_col] = data["close"].rolling(window=params.sma_slow, min_periods=1).mean()
+    data[SMA_FAST_COL] = data[sma_fast_col]
+    data[SMA_SLOW_COL] = data[sma_slow_col]
+
+    data[ema_fast_col] = data["close"].ewm(span=params.ema_fast, adjust=False).mean()
+    data[ema_slow_col] = data["close"].ewm(span=params.ema_slow, adjust=False).mean()
+    data[EMA_FAST_COL] = data[ema_fast_col]
+    data[EMA_SLOW_COL] = data[ema_slow_col]
 
     delta = data["close"].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1 / 14, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / 14, adjust=False).mean()
+    alpha = 1.0 / max(params.rsi_period, 1)
+    avg_gain = gain.ewm(alpha=alpha, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=alpha, adjust=False).mean()
     rs = avg_gain / (avg_loss + epsilon)
-    data["RSI"] = 100 - (100 / (1 + rs))
+    data[RSI_COL] = 100 - (100 / (1 + rs))
 
-    data["EMA_12"] = data["close"].ewm(span=12, adjust=False).mean()
-    data["EMA_26"] = data["close"].ewm(span=26, adjust=False).mean()
-    data["MACD"] = data["EMA_12"] - data["EMA_26"]
-    data["Signal_Line"] = data["MACD"].ewm(span=9, adjust=False).mean()
+    ema_fast = data["close"].ewm(span=params.macd_fast, adjust=False).mean()
+    ema_slow = data["close"].ewm(span=params.macd_slow, adjust=False).mean()
+    data[MACD_COL] = ema_fast - ema_slow
+    data[MACD_SIGNAL_COL] = data[MACD_COL].ewm(span=params.macd_signal, adjust=False).mean()
     return data
 
 
 def generate_trading_signals(data: pd.DataFrame) -> pd.DataFrame:
     data = data.copy()
     data["Buy_Signal"] = (
-        (data["SMA_50"] > data["SMA_200"])
-        & (data["EMA_50"] > data["EMA_200"])
-        & (data["RSI"] < 35)
-        & (data["MACD"] > data["Signal_Line"])
+        (data[SMA_FAST_COL] > data[SMA_SLOW_COL])
+        & (data[EMA_FAST_COL] > data[EMA_SLOW_COL])
+        & (data[RSI_COL] < 35)
+        & (data[MACD_COL] > data[MACD_SIGNAL_COL])
     ).astype(int)
 
     data["Sell_Signal"] = (
-        (data["SMA_50"] < data["SMA_200"])
-        & (data["EMA_50"] < data["EMA_200"])
-        & (data["RSI"] > 65)
-        & (data["MACD"] < data["Signal_Line"])
+        (data[SMA_FAST_COL] < data[SMA_SLOW_COL])
+        & (data[EMA_FAST_COL] < data[EMA_SLOW_COL])
+        & (data[RSI_COL] > 65)
+        & (data[MACD_COL] < data[MACD_SIGNAL_COL])
     ).astype(int)
 
     data["Signal"] = 0
@@ -49,26 +86,29 @@ def generate_trading_signals(data: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
-def calculate_additional_indicators(data: pd.DataFrame, atr_period: int = 24) -> pd.DataFrame:
+def calculate_additional_indicators(data: pd.DataFrame, params: IndicatorParameters) -> pd.DataFrame:
     epsilon = 1e-9
     data = data.copy()
 
-    window_bb = 35
-    data["BB_Middle"] = data["close"].rolling(window=window_bb).mean()
-    data["BB_Std"] = data["close"].rolling(window=window_bb).std()
-    data["BB_Upper"] = data["BB_Middle"] + 2 * data["BB_Std"]
-    data["BB_Lower"] = data["BB_Middle"] - 2 * data["BB_Std"]
+    window_bb = params.bollinger_period
+    data[BB_MID_COL] = data["close"].rolling(window=window_bb, min_periods=1).mean()
+    data[BB_STD_COL] = data["close"].rolling(window=window_bb, min_periods=1).std(ddof=0)
+    data[BB_UPPER_COL] = data[BB_MID_COL] + params.bollinger_std * data[BB_STD_COL]
+    data[BB_LOWER_COL] = data[BB_MID_COL] - params.bollinger_std * data[BB_STD_COL]
 
-    window_so = 30
-    data["Lowest_Low"] = data["low"].rolling(window=window_so).min()
-    data["Highest_High"] = data["high"].rolling(window=window_so).max()
-    data["%K"] = 100 * (data["close"] - data["Lowest_Low"]) / (data["Highest_High"] - data["Lowest_Low"] + epsilon)
-    data["%D"] = data["%K"].rolling(window=3).mean()
+    window_so = params.stochastic_period
+    data["Lowest_Low"] = data["low"].rolling(window=window_so, min_periods=1).min()
+    data["Highest_High"] = data["high"].rolling(window=window_so, min_periods=1).max()
+    data[STOCH_K_COL] = 100 * (data["close"] - data["Lowest_Low"]) / (
+        data["Highest_High"] - data["Lowest_Low"] + epsilon
+    )
+    data[STOCH_D_COL] = data[STOCH_K_COL].rolling(window=params.stochastic_signal, min_periods=1).mean()
 
     data["Prev_Close"] = data["close"].shift(1)
     data["High_Low"] = data["high"] - data["low"]
     data["High_PrevClose"] = (data["high"] - data["Prev_Close"]).abs()
     data["Low_PrevClose"] = (data["low"] - data["Prev_Close"]).abs()
     data["TR"] = data[["High_Low", "High_PrevClose", "Low_PrevClose"]].max(axis=1)
-    data["ATR"] = data["TR"].rolling(window=atr_period, min_periods=1).mean()
+    data[ATR_COL] = data["TR"].rolling(window=params.atr_period, min_periods=1).mean()
     return data
+

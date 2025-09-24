@@ -1,24 +1,12 @@
-﻿# bootstrap
-from pathlib import Path
-import sys
+﻿from core.bootstrap import setup_environment
 
-def _add_paths():
-    here = Path(__file__).resolve()
-    root = here.parents[1]
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
-    for sub in ("core", "services"):
-        ep = root / sub
-        if ep.exists() and str(ep) not in sys.path:
-            sys.path.insert(0, str(ep))
-_add_paths()
-# -----
+setup_environment()
 
 import pandas as pd
 import streamlit as st
 
-import core.database as database
 from core import demo_trading, ui
+from core.utils import open_database_connection
 
 
 def _fmt_money(value) -> str:
@@ -37,17 +25,10 @@ def _fmt_percent(value) -> str:
 
 ui.page_header("Статистика демо", "Баланс, сделки и распределение портфеля.", icon="📈")
 
-conn = None
 try:
-    conn = database.get_connection()
-except Exception:
-    try:
-        conn = database.get_conn()
-    except Exception:
-        conn = None
-
-if not conn:
-    st.error("Нет подключения к базе данных.")
+    conn = open_database_connection()
+except Exception as exc:
+    st.error(f"Не удалось подключиться к базе данных: {exc}")
     st.stop()
 
 with conn:
