@@ -6,7 +6,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Iterable, List, Optional, Sequence, Set, Tuple
 
 from .config import SourceConfig
 from .utils import acquire_db_lock, release_db_lock
@@ -154,6 +154,15 @@ class Storage:
                 (start_iso, end_iso),
             )
             return cur.fetchall()
+
+    def find_existing_hashes(self, hashes: Sequence[str]) -> Set[str]:
+        if not hashes:
+            return set()
+        placeholders = ",".join("?" for _ in hashes)
+        query = f"SELECT hash FROM articles WHERE hash IN ({placeholders})"
+        with self.connect() as conn:
+            cur = conn.execute(query, tuple(hashes))
+            return {row[0] for row in cur.fetchall()}
 
     def log_job_start(self, job_type: str) -> int:
         with self.connect() as conn:

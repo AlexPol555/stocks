@@ -57,6 +57,11 @@ def run_once(
                 entries=len(entries),
             )
             records: List[ArticleRecord] = []
+            entry_hashes = [
+                article_hash(entry.title or "", entry.url)
+                for entry in entries
+            ]
+            existing_hashes = storage.find_existing_hashes(entry_hashes)
             for entry_index, entry in enumerate(entries, start=1):
                 emit(
                     "article_progress",
@@ -68,7 +73,20 @@ def run_once(
                     title=entry.title,
                     url=entry.url,
                 )
-                article_id = article_hash(entry.title or "", entry.url)
+                article_id = entry_hashes[entry_index - 1]
+                if article_id in existing_hashes:
+                    duplicates += 1
+                    emit(
+                        "article_skipped",
+                        source=source.name,
+                        index=index,
+                        total_sources=total_sources,
+                        article_index=entry_index,
+                        article_total=len(entries),
+                        title=entry.title,
+                        reason="duplicate",
+                    )
+                    continue
                 published_at = entry.published or datetime.now(timezone.utc).isoformat()
                 body = entry.summary or ""
                 try:

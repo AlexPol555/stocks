@@ -134,6 +134,13 @@ with control_col:
                         _log(
                             f"{payload.get('source')}: {article_index}/{article_total}"
                         )
+            elif stage == "article_skipped":
+                article_total = int(payload.get("article_total", 0) or 0)
+                article_index = int(payload.get("article_index", 0) or 0)
+                reason = str(payload.get("reason") or "пропуск")
+                _log(
+                    f"{payload.get('source')}: {article_index}/{article_total} — {reason}"
+                )
             elif stage == "source_store":
                 _log(
                     f"{payload.get('source')}: сохранено {payload.get('new_articles', 0)}, дублей {payload.get('duplicates', 0)}"
