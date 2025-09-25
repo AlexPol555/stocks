@@ -38,50 +38,26 @@ def _prepare_signal_kpi_dataset(
 ) -> tuple[int, pd.DataFrame]:
     """Return total signal count and a trade-ready frame for KPI calculation."""
 
+    required_columns = ["date", "close", signal_col, profit_col, exit_col]
     if data.empty:
-        columns = ["date", signal_col, profit_col, exit_col, "close"]
-        return 0, pd.DataFrame(columns=columns)
+        return 0, pd.DataFrame(columns=required_columns)
 
     working = data.copy()
+    for column in required_columns:
+        if column not in working.columns:
+            working[column] = pd.NA
 
-    signal_series = working.get(signal_col)
-    if signal_series is not None:
-        total_signals = int(signal_series.fillna(0).abs().sum())
-    else:
-        total_signals = 0
+    signal_values = pd.to_numeric(working[signal_col], errors="coerce").fillna(0)
+    entry_mask = signal_values.abs() > 0
+    total_signals = int(entry_mask.sum())
+    if total_signals == 0:
+        return 0, pd.DataFrame(columns=required_columns)
 
-    profit_series = pd.Series(index=working.index, dtype=float)
-    if profit_col in working.columns:
-        profit_series = pd.to_numeric(working[profit_col], errors="coerce")
-
-    entry_dates = pd.Series(pd.NaT, index=working.index)
-    if "date" in working.columns:
-        entry_dates = pd.to_datetime(working["date"], errors="coerce")
-
-    close_prices = pd.Series(index=working.index, dtype=float)
-    if "close" in working.columns:
-        close_prices = pd.to_numeric(working["close"], errors="coerce")
-
-    exit_dates = pd.Series(pd.NaT, index=working.index)
-    if exit_col in working.columns:
-        exit_dates = pd.to_datetime(working[exit_col], errors="coerce")
-
-    closed_mask = profit_series.notna()
-    if closed_mask.any():
-        trades = pd.DataFrame(
-            {
-                "date": entry_dates.loc[closed_mask],
-                signal_col: signal_series.loc[closed_mask] if signal_series is not None else 0,
-                profit_col: profit_series.loc[closed_mask],
-                exit_col: exit_dates.loc[closed_mask].fillna(entry_dates.loc[closed_mask]),
-                "close": close_prices.loc[closed_mask],
-            }
-        )
-        trades = trades.dropna(subset=[profit_col, "date", "close"])
-        trades = trades[["date", signal_col, profit_col, exit_col, "close"]]
-    else:
-        trades = pd.DataFrame(columns=["date", signal_col, profit_col, exit_col, "close"])
-
+    trades = working.loc[entry_mask, required_columns].copy()
+    trades[profit_col] = pd.to_numeric(trades[profit_col], errors="coerce")
+    trades["date"] = pd.to_datetime(trades["date"], errors="coerce")
+    trades[exit_col] = pd.to_datetime(trades[exit_col], errors="coerce")
+    trades["close"] = pd.to_numeric(trades["close"], errors="coerce")
     return total_signals, trades
 
 
@@ -215,20 +191,6 @@ for label in selected_signal_labels:
 if signal_mask.any():
     filtered_df = filtered_df[signal_mask]
 kpi_data = kpi_df_source.copy()
-if not kpi_data.empty:
-    kpi_mask = pd.Series(False, index=kpi_data.index)
-    for label in selected_signal_labels:
-        signal_definition = SIGNAL_DEFINITIONS.get(label)
-        if not signal_definition:
-            continue
-        signal_col, profit_col, _ = signal_definition
-        if signal_col in kpi_data.columns:
-            col = kpi_data[signal_col]
-            kpi_mask |= col.fillna(0).abs() == 1
-        if profit_col in kpi_data.columns:
-            kpi_mask |= kpi_data[profit_col].notna()
-    if kpi_mask.any():
-        kpi_data = kpi_data[kpi_mask]
 kpi_costs = TradingCosts()
 metrics_rows = []
 for label in selected_signal_labels:
