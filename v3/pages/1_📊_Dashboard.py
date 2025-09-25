@@ -15,6 +15,16 @@ from core.indicators import clear_get_calculated_data, get_calculated_data
 from core.utils import extract_selected_rows, open_database_connection, read_db_path
 
 
+SIGNAL_DEFINITIONS = {
+    "Adaptive Buy": ("Adaptive_Buy_Signal", "Dynamic_Profit_Adaptive_Buy"),
+    "Adaptive Sell": ("Adaptive_Sell_Signal", "Dynamic_Profit_Adaptive_Sell"),
+    "New Adaptive Buy": ("New_Adaptive_Buy_Signal", "Dynamic_Profit_New_Adaptive_Buy"),
+    "New Adaptive Sell": ("New_Adaptive_Sell_Signal", "Dynamic_Profit_New_Adaptive_Sell"),
+}
+
+DEFAULT_SIGNAL_OPTIONS = tuple(SIGNAL_DEFINITIONS.keys())
+
+
 def _fmt_money(value) -> str:
     try:
         return format(float(value), ',.2f').replace(',', ' ')
@@ -42,10 +52,10 @@ ui.page_header(
 )
 
 with st.sidebar:
-    st.markdown("Фильтр данных")
+    st.subheader("Data selection")
     filter_mode = st.radio(
-        "Показывать",
-        ("По дате", "По тикеру", "Вся история"),
+        "Filter mode",
+        ("By date", "By ticker", "Show all"),
         index=0,
     )
 
@@ -54,20 +64,28 @@ with st.sidebar:
     date_placeholder = st.empty()
     ticker_placeholder = st.empty()
 
-    if filter_mode == "По дате":
+    if filter_mode == "By date":
         st.caption("Выберите торговый день")
-    elif filter_mode == "По тикеру":
+    elif filter_mode == "By ticker":
         st.caption("Выберите интересующий тикер")
+    else:
+        st.caption("Показаны все доступные данные")
 
-    st.markdown("Сигналы")
-    adaptive_buy = st.checkbox("Adaptive Buy", value=True)
-    adaptive_sell = st.checkbox("Adaptive Sell", value=True)
-    new_adaptive_buy = st.checkbox("New Adaptive Buy", value=True)
-    new_adaptive_sell = st.checkbox("New Adaptive Sell", value=True)
+    st.subheader("Signal filters")
+    signal_options = list(DEFAULT_SIGNAL_OPTIONS)
+    selected_signal_labels = st.multiselect(
+        "Signals",
+        signal_options,
+        default=signal_options,
+    )
+    st.caption("Выбранные типы сигналов объединяются в общую выборку.")
 
     st.divider()
     st.button("Очистить кэш расчётов", on_click=clear_get_calculated_data, use_container_width=True)
 
+
+if not selected_signal_labels:
+    selected_signal_labels = list(DEFAULT_SIGNAL_OPTIONS)
 
 db_path = Path(read_db_path())
 conn = None
@@ -95,9 +113,9 @@ with st.sidebar:
     unique_dates = sorted(df_all["date"].dropna().unique(), reverse=True)
 
 tickers = sorted(df_all["contract_code"].dropna().unique())
-if filter_mode == "По дате" and unique_dates:
+if filter_mode == "By date" and unique_dates:
     selected_date = date_placeholder.selectbox("Дата", options=unique_dates, index=0)
-elif filter_mode == "По тикеру" and tickers:
+elif filter_mode == "By ticker" and tickers:
     selected_ticker = ticker_placeholder.selectbox("Тикер", options=tickers, index=0)
 
 account_snapshot = demo_trading.get_account_snapshot(conn)
@@ -119,20 +137,16 @@ st.caption("Демо-счёт помогает проверить идеи пе�
 
 # применяем фильтры
 filtered_df = df_all.copy()
-if filter_mode == "По дате" and selected_date is not None:
+if filter_mode == "By date" and selected_date is not None:
     filtered_df = filtered_df[filtered_df["date"] == selected_date]
-elif filter_mode == "По тикеру" and selected_ticker is not None:
+elif filter_mode == "By ticker" and selected_ticker is not None:
     filtered_df = filtered_df[filtered_df["contract_code"] == selected_ticker]
 
 signal_mask = pd.Series(False, index=filtered_df.index)
-if adaptive_buy and 'Adaptive_Buy_Signal' in filtered_df.columns:
-    signal_mask |= filtered_df['Adaptive_Buy_Signal'] == 1
-if adaptive_sell and 'Adaptive_Sell_Signal' in filtered_df.columns:
-    signal_mask |= filtered_df['Adaptive_Sell_Signal'] == 1
-if new_adaptive_buy and 'New_Adaptive_Buy_Signal' in filtered_df.columns:
-    signal_mask |= filtered_df['New_Adaptive_Buy_Signal'] == 1
-if new_adaptive_sell and 'New_Adaptive_Sell_Signal' in filtered_df.columns:
-    signal_mask |= filtered_df['New_Adaptive_Sell_Signal'] == 1
+for label in selected_signal_labels:
+    signal_col, _ = SIGNAL_DEFINITIONS.get(label, (None, None))
+    if signal_col and signal_col in filtered_df.columns:
+        signal_mask |= filtered_df[signal_col] == 1
 if signal_mask.any():
     filtered_df = filtered_df[signal_mask]
 
@@ -472,39 +486,34 @@ with tab_positions:
 
 st.divider()
 ui.section_title("Сводка по тикерам")
-df_signals = df_all[
-    (df_all.get('Adaptive_Buy_Signal', 0) == 1)
-    | (df_all.get('Adaptive_Sell_Signal', 0) == 1)
-    | (df_all.get('New_Adaptive_Buy_Signal', 0) == 1)
-    | (df_all.get('New_Adaptive_Sell_Signal', 0) == 1)
-].copy()
+active_mask = pd.Series(False, index=df_all.index)
+for label in selected_signal_labels:
+    signal_col, _ = SIGNAL_DEFINITIONS.get(label, (None, None))
+    if signal_col and signal_col in df_all.columns:
+        active_mask |= df_all.get(signal_col, 0) == 1
+
+df_signals = df_all[active_mask].copy()
 
 if df_signals.empty:
-    st.info("Активных сигналов по стратегиям Adaptive не обнаружено.")
+    st.info("Активных сигналов по выбранным стратегиям не найдено.")
 else:
-    df_signals['Profit_Adaptive_Buy'] = np.where(
-        df_signals.get('Adaptive_Buy_Signal', 0) == 1,
-        df_signals.get('Dynamic_Profit_Adaptive_Buy', 0),
-        0,
-    )
-    df_signals['Profit_Adaptive_Sell'] = np.where(
-        df_signals.get('Adaptive_Sell_Signal', 0) == 1,
-        df_signals.get('Dynamic_Profit_Adaptive_Sell', 0),
-        0,
-    )
-    df_signals['Profit_New_Adaptive_Buy'] = np.where(
-        df_signals.get('New_Adaptive_Buy_Signal', 0) == 1,
-        df_signals.get('Dynamic_Profit_New_Adaptive_Buy', 0),
-        0,
-    )
-    df_signals['Profit_New_Adaptive_Sell'] = np.where(
-        df_signals.get('New_Adaptive_Sell_Signal', 0) == 1,
-        df_signals.get('Dynamic_Profit_New_Adaptive_Sell', 0),
-        0,
-    )
-    st.dataframe(
-        df_signals.groupby('contract_code').sum(numeric_only=True).reset_index(),
-        use_container_width=True,
-    )
+    profit_columns = []
+    for label in selected_signal_labels:
+        signal_col, profit_col = SIGNAL_DEFINITIONS.get(label, (None, None))
+        if not signal_col or profit_col not in df_signals.columns:
+            continue
+        profit_alias = f"Profit_{label.replace(' ', '_')}"
+        df_signals[profit_alias] = np.where(
+            df_signals.get(signal_col, 0) == 1,
+            df_signals.get(profit_col, 0),
+            0,
+        )
+        profit_columns.append(profit_alias)
+
+    if profit_columns:
+        summary = df_signals.groupby('contract_code', as_index=False)[profit_columns].sum()
+        st.dataframe(summary, use_container_width=True)
+    else:
+        st.info("Для выбранных сигналов нет данных о прибыли.")
 
 st.caption("Если данные выглядят устаревшими, воспользуйтесь кнопкой в сайдбаре, чтобы сбросить кэш расчётов.")

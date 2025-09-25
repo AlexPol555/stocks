@@ -54,6 +54,7 @@ def update_missing_market_data(analyzer, conn, ticker: str, stock_data: pd.DataF
         stock_data = stock_data.copy()
         stock_data["date_obj"] = pd.to_datetime(stock_data["time"]).dt.date
 
+    updates = []
     for daily_data_id, date_str in records:
         try:
             daily_date = pd.to_datetime(date_str).date()
@@ -67,23 +68,27 @@ def update_missing_market_data(analyzer, conn, ticker: str, stock_data: pd.DataF
             continue
 
         row = matching_rows.iloc[0]
-        cursor.execute(
+        updates.append((
+            row.get("open"),
+            row.get("low"),
+            row.get("high"),
+            row.get("close"),
+            row.get("volume"),
+            daily_data_id,
+        ))
+        log.append(f"Обновлены рыночные данные для {ticker} на {daily_date}.")
+
+    if updates:
+        cursor.executemany(
             """
             UPDATE daily_data
             SET open = ?, low = ?, high = ?, close = ?, volume = ?
             WHERE id = ?
             """,
-            (
-                row.get("open"),
-                row.get("low"),
-                row.get("high"),
-                row.get("close"),
-                row.get("volume"),
-                daily_data_id,
-            ),
+            updates,
         )
         conn.commit()
-        log.append(f"Обновлены рыночные данные для {ticker} на {daily_date}.")
+
 
     return log
 

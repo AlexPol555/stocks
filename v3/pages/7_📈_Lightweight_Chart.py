@@ -1,18 +1,8 @@
-# bootstrap
 from pathlib import Path
-import sys
 
-def _add_paths():
-    here = Path(__file__).resolve()
-    root = here.parents[1]
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
-    for sub in ("core", "services"):
-        ep = root / sub
-        if ep.exists() and str(ep) not in sys.path:
-            sys.path.insert(0, str(ep))
-_add_paths()
-# -----
+from core.bootstrap import setup_environment
+
+setup_environment()
 
 import json
 

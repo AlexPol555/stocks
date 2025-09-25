@@ -44,11 +44,11 @@ class StockAnalyzer:
     Parameters
     ----------
     api_key:
-        РўРѕРєРµРЅ РґРѕСЃС‚СѓРїР° РґР»СЏ Tinkoff Invest. Р•СЃР»Рё РЅРµ Р·Р°РґР°РЅ вЂ“ РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ СЂРµР¶РёРј
-        С‚РѕР»СЊРєРѕ РґР»СЏ С‡С‚РµРЅРёСЏ РёР· Р±Р°Р·С‹ РґР°РЅРЅС‹С….
+        Access token for Tinkoff Invest. When omitted, the analyzer falls back to offline mode.
     db_conn:
-        РђРєС‚РёРІРЅРѕРµ СЃРѕРµРґРёРЅРµРЅРёРµ СЃ SQLite. РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РІ РєР°С‡РµСЃС‚РІРµ РёСЃС‚РѕС‡РЅРёРєР°
-        СЂРµР·РµСЂРІРЅС‹С… РґР°РЅРЅС‹С…, РµСЃР»Рё API РЅРµРґРѕСЃС‚СѓРїРЅРѕ.
+        Optional SQLite connection used as a local data source when the API is unavailable.
+    warn_callback:
+        Optional callable that allows the caller to surface warning messages in the UI layer.
     """
 
     api_key: Optional[str]
@@ -62,11 +62,7 @@ class StockAnalyzer:
                 return
             except Exception:
                 logger.exception("warn_callback failed")
-        try:
-            import streamlit as st  # type: ignore
-            st.warning(message)
-        except Exception:
-            logger.warning(message)
+        logger.warning(message)
 
     # ------------------------------------------------------------------ utils
     def _figi_from_db_or_empty(self) -> Dict[str, str]:
