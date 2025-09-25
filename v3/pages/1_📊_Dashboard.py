@@ -29,6 +29,38 @@ SIGNAL_DEFINITIONS = {
 DEFAULT_SIGNAL_OPTIONS = tuple(SIGNAL_DEFINITIONS.keys())
 
 
+def _prepare_signal_kpi_dataset(
+    data: pd.DataFrame,
+    *,
+    signal_col: str,
+    profit_col: str,
+    exit_col: str,
+) -> tuple[int, pd.DataFrame]:
+    """Return total signal count and a trade-ready frame for KPI calculation."""
+
+    required_columns = ["date", "close", signal_col, profit_col, exit_col]
+    if data.empty:
+        return 0, pd.DataFrame(columns=required_columns)
+
+    working = data.copy()
+    for column in required_columns:
+        if column not in working.columns:
+            working[column] = pd.NA
+
+    signal_values = pd.to_numeric(working[signal_col], errors="coerce").fillna(0)
+    entry_mask = signal_values.abs() > 0
+    total_signals = int(entry_mask.sum())
+    if total_signals == 0:
+        return 0, pd.DataFrame(columns=required_columns)
+
+    trades = working.loc[entry_mask, required_columns].copy()
+    trades[profit_col] = pd.to_numeric(trades[profit_col], errors="coerce")
+    trades["date"] = pd.to_datetime(trades["date"], errors="coerce")
+    trades[exit_col] = pd.to_datetime(trades[exit_col], errors="coerce")
+    trades["close"] = pd.to_numeric(trades["close"], errors="coerce")
+    return total_signals, trades
+
+
 def _fmt_money(value) -> str:
     try:
         return format(float(value), ',.2f').replace(',', ' ')
@@ -140,10 +172,12 @@ st.caption("Демо-счёт помогает проверить идеи пе�
 
 # применяем фильтры
 filtered_df = df_all.copy()
+kpi_df_source = df_all.copy()
 if filter_mode == "By date" and selected_date is not None:
     filtered_df = filtered_df[filtered_df["date"] == selected_date]
 elif filter_mode == "By ticker" and selected_ticker is not None:
     filtered_df = filtered_df[filtered_df["contract_code"] == selected_ticker]
+    kpi_df_source = kpi_df_source[kpi_df_source["contract_code"] == selected_ticker]
 
 signal_mask = pd.Series(False, index=filtered_df.index)
 for label in selected_signal_labels:
@@ -152,9 +186,11 @@ for label in selected_signal_labels:
         continue
     signal_col = signal_definition[0]
     if signal_col in filtered_df.columns:
-        signal_mask |= filtered_df[signal_col] == 1
+        col = filtered_df[signal_col]
+        signal_mask |= col.fillna(0).abs() == 1
 if signal_mask.any():
     filtered_df = filtered_df[signal_mask]
+kpi_data = kpi_df_source.copy()
 kpi_costs = TradingCosts()
 metrics_rows = []
 for label in selected_signal_labels:
@@ -162,18 +198,25 @@ for label in selected_signal_labels:
     if not signal_definition:
         continue
     signal_col, profit_col, exit_col = signal_definition
-    if signal_col not in filtered_df.columns or profit_col not in filtered_df.columns:
-        continue
+    total_signals, trades_frame = _prepare_signal_kpi_dataset(
+        kpi_data,
+        signal_col=signal_col,
+        profit_col=profit_col,
+        exit_col=exit_col,
+    )
     metrics = compute_kpi_for_signals(
-        filtered_df,
+        trades_frame,
         signal_col=signal_col,
         profit_col=profit_col,
         exit_col=exit_col,
         costs=kpi_costs,
     )
+    closed_trades = int(metrics.total_trades)
     metrics_rows.append({
         "signal": label,
-        "trades": metrics.total_trades,
+        "signals_total": total_signals,
+        "trades": closed_trades,
+        "open_trades": max(total_signals - closed_trades, 0),
         "win_rate": round(metrics.win_rate * 100, 2),
         "avg_pnl": round(metrics.avg_pnl, 2),
         "median_pnl": round(metrics.median_pnl, 2),
@@ -189,7 +232,9 @@ if metrics_rows:
     kpi_df = pd.DataFrame(metrics_rows)
     kpi_df.rename(columns={
         "signal": "?????????",
+        "signals_total": "Всего сигналов",
         "trades": "??????",
+        "open_trades": "Открыто",
         "win_rate": "Win rate %",
         "avg_pnl": "Avg PnL %",
         "median_pnl": "Median PnL %",
