@@ -1,0 +1,10 @@
+feedparser
+requests
+beautifulsoup4
+newspaper3k
+python-dateutil
+tqdm
+sqlalchemy
+pytest
+lxml
+streamlit
