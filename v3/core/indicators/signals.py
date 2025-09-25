@@ -76,9 +76,15 @@ def calculate_additional_filters(data: pd.DataFrame) -> pd.DataFrame:
 def generate_final_adaptive_signals(data: pd.DataFrame) -> pd.DataFrame:
     data = data.copy()
     data["Combined_Buy_Signal"] = (data.get("Adaptive_Buy_Signal", 0) | data.get("New_Adaptive_Buy_Signal", 0)).astype(int)
+    data["Combined_Sell_Signal"] = (data.get("Adaptive_Sell_Signal", 0) | data.get("New_Adaptive_Sell_Signal", 0)).astype(int)
     data = calculate_additional_filters(data)
     data["Final_Buy_Signal"] = (
         data["Combined_Buy_Signal"]
+        & data["Volume_Filter"]
+        & data["Volatility_Filter"]
+    ).astype(int)
+    data["Final_Sell_Signal"] = (
+        data["Combined_Sell_Signal"]
         & data["Volume_Filter"]
         & data["Volatility_Filter"]
     ).astype(int)

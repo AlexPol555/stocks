@@ -154,6 +154,7 @@ def _ensure_compatibility_columns(result: pd.DataFrame) -> pd.DataFrame:
         "New_Adaptive_Buy": "long",
         "New_Adaptive_Sell": "short",
         "Final_Buy": "long",
+        "Final_Sell": "short",
     }
     for legacy, prefix in mapping.items():
         net_col = f"{prefix}_trade_net_pct"

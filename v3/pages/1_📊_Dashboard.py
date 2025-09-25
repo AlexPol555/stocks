@@ -11,15 +11,19 @@ import streamlit as st
 from streamlit_lightweight_charts import renderLightweightCharts  # type: ignore
 
 from core import database, demo_trading, ui
+from core.analytics.metrics import TradingCosts
+from core.analytics.workflows import compute_kpi_for_signals
 from core.indicators import clear_get_calculated_data, get_calculated_data
 from core.utils import extract_selected_rows, open_database_connection, read_db_path
 
 
 SIGNAL_DEFINITIONS = {
-    "Adaptive Buy": ("Adaptive_Buy_Signal", "Dynamic_Profit_Adaptive_Buy"),
-    "Adaptive Sell": ("Adaptive_Sell_Signal", "Dynamic_Profit_Adaptive_Sell"),
-    "New Adaptive Buy": ("New_Adaptive_Buy_Signal", "Dynamic_Profit_New_Adaptive_Buy"),
-    "New Adaptive Sell": ("New_Adaptive_Sell_Signal", "Dynamic_Profit_New_Adaptive_Sell"),
+    "Adaptive Buy": ("Adaptive_Buy_Signal", "Dynamic_Profit_Adaptive_Buy", "Exit_Date_Adaptive_Buy"),
+    "Adaptive Sell": ("Adaptive_Sell_Signal", "Dynamic_Profit_Adaptive_Sell", "Exit_Date_Adaptive_Sell"),
+    "New Adaptive Buy": ("New_Adaptive_Buy_Signal", "Dynamic_Profit_New_Adaptive_Buy", "Exit_Date_New_Adaptive_Buy"),
+    "New Adaptive Sell": ("New_Adaptive_Sell_Signal", "Dynamic_Profit_New_Adaptive_Sell", "Exit_Date_New_Adaptive_Sell"),
+    "Final Buy": ("Final_Buy_Signal", "Dynamic_Profit_Final_Buy", "Exit_Date_Final_Buy"),
+    "Final Sell": ("Final_Sell_Signal", "Dynamic_Profit_Final_Sell", "Exit_Date_Final_Sell"),
 }
 
 DEFAULT_SIGNAL_OPTIONS = tuple(SIGNAL_DEFINITIONS.keys())
@@ -117,7 +121,6 @@ if filter_mode == "By date" and unique_dates:
     selected_date = date_placeholder.selectbox("Дата", options=unique_dates, index=0)
 elif filter_mode == "By ticker" and tickers:
     selected_ticker = ticker_placeholder.selectbox("Тикер", options=tickers, index=0)
-
 account_snapshot = demo_trading.get_account_snapshot(conn)
 account_info = demo_trading.get_account(conn)
 account_currency = account_info.get("currency", "RUB")
@@ -144,11 +147,60 @@ elif filter_mode == "By ticker" and selected_ticker is not None:
 
 signal_mask = pd.Series(False, index=filtered_df.index)
 for label in selected_signal_labels:
-    signal_col, _ = SIGNAL_DEFINITIONS.get(label, (None, None))
-    if signal_col and signal_col in filtered_df.columns:
+    signal_definition = SIGNAL_DEFINITIONS.get(label)
+    if not signal_definition:
+        continue
+    signal_col = signal_definition[0]
+    if signal_col in filtered_df.columns:
         signal_mask |= filtered_df[signal_col] == 1
 if signal_mask.any():
     filtered_df = filtered_df[signal_mask]
+kpi_costs = TradingCosts()
+metrics_rows = []
+for label in selected_signal_labels:
+    signal_definition = SIGNAL_DEFINITIONS.get(label)
+    if not signal_definition:
+        continue
+    signal_col, profit_col, exit_col = signal_definition
+    if signal_col not in filtered_df.columns or profit_col not in filtered_df.columns:
+        continue
+    metrics = compute_kpi_for_signals(
+        filtered_df,
+        signal_col=signal_col,
+        profit_col=profit_col,
+        exit_col=exit_col,
+        costs=kpi_costs,
+    )
+    metrics_rows.append({
+        "signal": label,
+        "trades": metrics.total_trades,
+        "win_rate": round(metrics.win_rate * 100, 2),
+        "avg_pnl": round(metrics.avg_pnl, 2),
+        "median_pnl": round(metrics.median_pnl, 2),
+        "profit_factor": round(metrics.profit_factor, 2) if metrics.profit_factor != float('inf') else float('inf'),
+        "cagr": round(metrics.cagr * 100, 2),
+        "sharpe": round(metrics.sharpe, 2),
+        "sortino": round(metrics.sortino, 2),
+        "max_drawdown": round(metrics.max_drawdown * 100, 2),
+    })
+
+if metrics_rows:
+    ui.section_title("Signal KPIs", "Aggregated performance by strategy")
+    kpi_df = pd.DataFrame(metrics_rows)
+    kpi_df.rename(columns={
+        "signal": "?????????",
+        "trades": "??????",
+        "win_rate": "Win rate %",
+        "avg_pnl": "Avg PnL %",
+        "median_pnl": "Median PnL %",
+        "profit_factor": "Profit factor",
+        "cagr": "CAGR %",
+        "sharpe": "Sharpe",
+        "sortino": "Sortino",
+        "max_drawdown": "Max DD %",
+    }, inplace=True)
+    st.dataframe(kpi_df, use_container_width=True)
+
 
 ui.section_title("Лента сигналов", "таблица поддерживает сортировку и поиск")
 
@@ -308,6 +360,8 @@ if selected_row is not None:
             ("Adaptive Sell", selected_row.get('Adaptive_Sell_Signal') == 1, 'Dynamic_Profit_Adaptive_Sell', 'Exit_Date_Adaptive_Sell', 'Exit_Price_Adaptive_Sell'),
             ("New Adaptive Buy", selected_row.get('New_Adaptive_Buy_Signal') == 1, 'Dynamic_Profit_New_Adaptive_Buy', 'Exit_Date_New_Adaptive_Buy', 'Exit_Price_New_Adaptive_Buy'),
             ("New Adaptive Sell", selected_row.get('New_Adaptive_Sell_Signal') == 1, 'Dynamic_Profit_New_Adaptive_Sell', 'Exit_Date_New_Adaptive_Sell', 'Exit_Price_New_Adaptive_Sell'),
+            ("Final Buy", selected_row.get('Final_Buy_Signal') == 1, 'Dynamic_Profit_Final_Buy', 'Exit_Date_Final_Buy', 'Exit_Price_Final_Buy'),
+            ("Final Sell", selected_row.get('Final_Sell_Signal') == 1, 'Dynamic_Profit_Final_Sell', 'Exit_Date_Final_Sell', 'Exit_Price_Final_Sell'),
         ]:
             if flag:
                 rows.append({
@@ -499,8 +553,11 @@ if df_signals.empty:
 else:
     profit_columns = []
     for label in selected_signal_labels:
-        signal_col, profit_col = SIGNAL_DEFINITIONS.get(label, (None, None))
-        if not signal_col or profit_col not in df_signals.columns:
+        signal_definition = SIGNAL_DEFINITIONS.get(label)
+        if not signal_definition:
+            continue
+        signal_col, profit_col, _ = signal_definition
+        if profit_col not in df_signals.columns:
             continue
         profit_alias = f"Profit_{label.replace(' ', '_')}"
         df_signals[profit_alias] = np.where(

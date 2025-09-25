@@ -1,7 +1,7 @@
 ﻿from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -186,6 +186,8 @@ def apply_risk_management(
     atr_col: str = ATR_COL,
 ) -> Dict[str, pd.DataFrame]:
     df = data.copy()
+    index_map = list(df.index)
+    index_map = list(df.index)
     long_trades = simulate_trades(
         df,
         signal_col=long_signal_col,
@@ -203,8 +205,18 @@ def apply_risk_management(
         costs=costs,
     )
 
-    df = _annotate_trades(df, long_trades, prefix="long")
-    df = _annotate_trades(df, short_trades, prefix="short")
+    df = _annotate_trades(
+        df,
+        long_trades,
+        prefix="long",
+        index_map=index_map,
+    )
+    df = _annotate_trades(
+        df,
+        short_trades,
+        prefix="short",
+        index_map=index_map,
+    )
 
     return {
         "frame": df,
@@ -213,7 +225,13 @@ def apply_risk_management(
     }
 
 
-def _annotate_trades(df: pd.DataFrame, trades: List[TradeRecord], prefix: str) -> pd.DataFrame:
+def _annotate_trades(
+    df: pd.DataFrame,
+    trades: List[TradeRecord],
+    prefix: str,
+    *,
+    index_map: Optional[Sequence] = None,
+) -> pd.DataFrame:
     if not trades:
         columns = {
             f"{prefix}_trade_net_pct": np.nan,
@@ -228,8 +246,11 @@ def _annotate_trades(df: pd.DataFrame, trades: List[TradeRecord], prefix: str) -
         return df
 
     df = df.copy()
+    positional_index = list(index_map) if index_map is not None else list(df.index)
     for trade in trades:
-        idx = trade.entry_index
+        if trade.entry_index < 0 or trade.entry_index >= len(positional_index):
+            continue
+        idx = positional_index[trade.entry_index]
         df.loc[idx, f"{prefix}_trade_net_pct"] = trade.net_return * 100.0
         df.loc[idx, f"{prefix}_trade_gross_pct"] = trade.gross_return * 100.0
         df.loc[idx, f"{prefix}_trade_exit_price"] = trade.exit_price
