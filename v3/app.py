@@ -28,6 +28,7 @@ _default_visibility = {
     "Orders": True,
     "Demo_Stats": True,
     "Lightweight_Chart": True,
+    "News": True,
     "Settings": True,
     "Debug": False,
 }
@@ -45,6 +46,7 @@ NAV_GROUPS = [
             ("Data_Load", "📥 Загрузка данных", "pages/3_📥_Data_Load.py"),
             ("Auto_Update", "🔁 Автообновление", "pages/4_🔁_Auto_Update.py"),
             ("Orders", "🛒 Ордеры", "pages/5_🛒_Orders.py"),
+            ("News", "🗞️ Новости", "pages/8_🗞️_News.py"),
         ],
     ),
     (

@@ -1,6 +1,7 @@
 ﻿"""Core package exposing reusable building blocks for the Streamlit app."""
 
 from . import database
+from . import news
 from .analyzer import StockAnalyzer
 from .data_loader import load_csv_data
 from .indicators import (
@@ -39,6 +40,7 @@ __all__ = [
     "clear_get_calculated_data",
     "create_order",
     "database",
+    "news",
     "demo_trading",
     "generate_adaptive_signals",
     "generate_final_adaptive_signals",
