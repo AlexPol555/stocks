@@ -140,10 +140,12 @@ st.caption("Демо-счёт помогает проверить идеи пе�
 
 # применяем фильтры
 filtered_df = df_all.copy()
+kpi_df_source = df_all.copy()
 if filter_mode == "By date" and selected_date is not None:
     filtered_df = filtered_df[filtered_df["date"] == selected_date]
 elif filter_mode == "By ticker" and selected_ticker is not None:
     filtered_df = filtered_df[filtered_df["contract_code"] == selected_ticker]
+    kpi_df_source = kpi_df_source[kpi_df_source["contract_code"] == selected_ticker]
 
 signal_mask = pd.Series(False, index=filtered_df.index)
 for label in selected_signal_labels:
@@ -155,6 +157,20 @@ for label in selected_signal_labels:
         signal_mask |= filtered_df[signal_col] == 1
 if signal_mask.any():
     filtered_df = filtered_df[signal_mask]
+kpi_data = kpi_df_source.copy()
+if not kpi_data.empty:
+    kpi_mask = pd.Series(False, index=kpi_data.index)
+    for label in selected_signal_labels:
+        signal_definition = SIGNAL_DEFINITIONS.get(label)
+        if not signal_definition:
+            continue
+        signal_col, profit_col, _ = signal_definition
+        if signal_col in kpi_data.columns:
+            kpi_mask |= kpi_data[signal_col] == 1
+        if profit_col in kpi_data.columns:
+            kpi_mask |= kpi_data[profit_col].notna()
+    if kpi_mask.any():
+        kpi_data = kpi_data[kpi_mask]
 kpi_costs = TradingCosts()
 metrics_rows = []
 for label in selected_signal_labels:
@@ -162,10 +178,14 @@ for label in selected_signal_labels:
     if not signal_definition:
         continue
     signal_col, profit_col, exit_col = signal_definition
-    if signal_col not in filtered_df.columns or profit_col not in filtered_df.columns:
+    if (
+        signal_col not in kpi_data.columns
+        or profit_col not in kpi_data.columns
+        or exit_col not in kpi_data.columns
+    ):
         continue
     metrics = compute_kpi_for_signals(
-        filtered_df,
+        kpi_data,
         signal_col=signal_col,
         profit_col=profit_col,
         exit_col=exit_col,
