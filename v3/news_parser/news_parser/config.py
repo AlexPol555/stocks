@@ -16,10 +16,37 @@ DEFAULT_SOURCES = [
     },
     {
         "name": "Коммерсантъ",
-        "rss_url": "https://www.kommersant.ru/RSS/news.xml",
-        "website": "https://www.kommersant.ru",
+        "rss_url": "https://www.kommersант.ru/RSS/news.xml",
+        "website": "https://www.kommersант.ru",
+    },
+    {
+        "name": "Smart-Lab Календарь",
+        "rss_url": "https://smart-lab.ru/calendar/",
+        "website": "https://smart-lab.ru",
+        "page_url": "https://smart-lab.ru/calendar/",
+        "mode": "smartlab_calendar",
+    },
+    {
+        "name": "Smart-Lab Экономический календарь",
+        "rss_url": "https://smart-lab.ru/calendar/economic/",
+        "website": "https://smart-lab.ru",
+        "page_url": "https://smart-lab.ru/calendar/economic/",
+        "mode": "smartlab_economic",
+    },
+    {
+        "name": "Smart-Lab Новости",
+        "rss_url": "https://smart-lab.ru/news/rss/",
+        "website": "https://smart-lab.ru/news/list/page1/",
+    },
+    {
+        "name": "BCS Express Российский рынок",
+        "rss_url": "https://bcs-express.ru/category/rossiyskiy-rynok",
+        "website": "https://bcs-express.ru",
+        "page_url": "https://bcs-express.ru/category/rossiyskiy-rynok",
+        "mode": "bcs_category",
     },
 ]
+
 
 
 @dataclass
@@ -29,6 +56,8 @@ class SourceConfig:
     name: str
     rss_url: str
     website: Optional[str] = None
+    mode: str = "rss"
+    page_url: Optional[str] = None
 
     @classmethod
     def from_mapping(cls, data: dict) -> "SourceConfig":
@@ -36,6 +65,8 @@ class SourceConfig:
             name=data.get("name", ""),
             rss_url=data.get("rss_url", ""),
             website=data.get("website"),
+            mode=data.get("mode", "rss"),
+            page_url=data.get("page_url"),
         )
 
 

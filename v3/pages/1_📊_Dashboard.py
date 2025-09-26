@@ -587,7 +587,10 @@ st.divider()
 ui.section_title("Сводка по тикерам")
 active_mask = pd.Series(False, index=df_all.index)
 for label in selected_signal_labels:
-    signal_col, _ = SIGNAL_DEFINITIONS.get(label, (None, None))
+    signal_definition = SIGNAL_DEFINITIONS.get(label)
+    if not signal_definition:
+        continue
+    signal_col = signal_definition[0]
     if signal_col and signal_col in df_all.columns:
         active_mask |= df_all.get(signal_col, 0) == 1
 

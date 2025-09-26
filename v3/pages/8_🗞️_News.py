@@ -143,7 +143,7 @@ with control_col:
                 )
             elif stage == "source_store":
                 _log(
-                    f"{payload.get('source')}: сохранено {payload.get('new_articles', 0)}, дублей {payload.get('duplicates', 0)}"
+                    f"{payload.get('source')}: сохранено {payload.get('new_articles', 0)}, дубликатов {payload.get('duplicates', 0)}, пропущено {payload.get('skipped', 0)}"
                 )
             elif stage == "matching_start":
                 state["matching_total"] = int(payload.get("total", 0) or 0)

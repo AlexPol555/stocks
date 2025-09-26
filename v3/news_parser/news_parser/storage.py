@@ -49,9 +49,11 @@ class Storage:
         mapping: dict[str, int] = {}
         with self.connect() as conn:
             for src in sources:
+                rss_value = src.rss_url or src.page_url or ""
+                website_value = src.website or src.page_url or src.rss_url or ""
                 conn.execute(
                     "INSERT OR IGNORE INTO sources (name, rss_url, website) VALUES (?, ?, ?)",
-                    (src.name, src.rss_url, src.website),
+                    (src.name, rss_value, website_value),
                 )
             conn.commit()
             for src in sources:
@@ -158,11 +160,15 @@ class Storage:
     def find_existing_hashes(self, hashes: Sequence[str]) -> Set[str]:
         if not hashes:
             return set()
-        placeholders = ",".join("?" for _ in hashes)
-        query = f"SELECT hash FROM articles WHERE hash IN ({placeholders})"
+        existing: Set[str] = set()
         with self.connect() as conn:
-            cur = conn.execute(query, tuple(hashes))
-            return {row[0] for row in cur.fetchall()}
+            for chunk_start in range(0, len(hashes), 500):
+                chunk = hashes[chunk_start : chunk_start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                query = f"SELECT hash FROM articles WHERE hash IN ({placeholders})"
+                cur = conn.execute(query, tuple(chunk))
+                existing.update(row[0] for row in cur.fetchall())
+        return existing
 
     def log_job_start(self, job_type: str) -> int:
         with self.connect() as conn:

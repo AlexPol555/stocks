@@ -8,6 +8,7 @@ from typing import Callable, Dict, List, Optional
 from .config import Config
 from .dedup import article_hash
 from .fetcher import FetchError, Fetcher
+from .html_sources import fetch_html_entries
 from .parser import extract_article_text
 from .storage import ArticleRecord, Storage
 from .ticker_match import TickerMatcher
@@ -48,7 +49,10 @@ def run_once(
         for index, source in enumerate(config.sources, start=1):
             logger.info("Fetching feed for %s", source.name)
             emit("source_start", source=source.name, index=index, total_sources=total_sources)
-            entries = fetcher.fetch_feed(source.rss_url)
+            if (source.mode or "rss").lower() == "rss":
+                entries = fetcher.fetch_feed(source.rss_url)
+            else:
+                entries = fetch_html_entries(fetcher, source)
             emit(
                 "source_feed",
                 source=source.name,
@@ -62,6 +66,7 @@ def run_once(
                 for entry in entries
             ]
             existing_hashes = storage.find_existing_hashes(entry_hashes)
+            skipped_duplicates = 0
             for entry_index, entry in enumerate(entries, start=1):
                 emit(
                     "article_progress",
@@ -76,6 +81,7 @@ def run_once(
                 article_id = entry_hashes[entry_index - 1]
                 if article_id in existing_hashes:
                     duplicates += 1
+                    skipped_duplicates += 1
                     emit(
                         "article_skipped",
                         source=source.name,
@@ -119,6 +125,7 @@ def run_once(
                 total_sources=total_sources,
                 new_articles=len(ids),
                 duplicates=dup,
+                skipped=skipped_duplicates,
             )
         matches_total = 0
         tickers = storage.fetch_tickers()
