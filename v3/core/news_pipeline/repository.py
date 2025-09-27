@@ -500,6 +500,52 @@ class NewsPipelineRepository:
             )
             conn.commit()
 
+    def reject_all_candidates(self, operator: Optional[str] = None) -> int:
+        """Mark all candidates as rejected (confirmed = -1) instead of deleting them."""
+        now = _utc_now()
+        with self.connect() as conn:
+            # Count candidates before update
+            cursor = conn.execute("SELECT COUNT(*) FROM news_tickers")
+            count_before = cursor.fetchone()[0]
+            
+            # Mark all candidates as rejected
+            conn.execute(
+                """
+                UPDATE news_tickers 
+                SET confirmed = -1, confirmed_by = ?, confirmed_at = ?
+                WHERE confirmed != -1
+                """,
+                (operator or "system", now)
+            )
+            conn.commit()
+            
+            # Count updated candidates
+            cursor = conn.execute("SELECT COUNT(*) FROM news_tickers WHERE confirmed = -1")
+            count_after = cursor.fetchone()[0]
+            
+            return count_after
+
+    def reset_rejected_candidates(self, operator: Optional[str] = None) -> int:
+        """Reset all rejected candidates to unconfirmed status (confirmed = 0)."""
+        now = _utc_now()
+        with self.connect() as conn:
+            # Count rejected candidates before update
+            cursor = conn.execute("SELECT COUNT(*) FROM news_tickers WHERE confirmed = -1")
+            count_before = cursor.fetchone()[0]
+            
+            # Reset rejected candidates to unconfirmed
+            conn.execute(
+                """
+                UPDATE news_tickers 
+                SET confirmed = 0, confirmed_by = ?, confirmed_at = ?
+                WHERE confirmed = -1
+                """,
+                (operator or "system", now)
+            )
+            conn.commit()
+            
+            return count_before
+
     def fetch_pending_candidates(
         self,
         *,

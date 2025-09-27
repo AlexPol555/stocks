@@ -402,6 +402,41 @@ def create_sample_data(repository):
         st.warning(f"Could not create sample data: {exc}")
         logger.warning("Sample data creation failed: %s", exc)
 
+def get_news_statistics(repository):
+    """Get news processing statistics."""
+    try:
+        with repository.connect() as conn:
+            # Total articles
+            total_articles = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
+            
+            # Processed articles
+            processed_articles = conn.execute("SELECT COUNT(*) FROM articles WHERE processed = 1").fetchone()[0]
+            
+            # Unprocessed articles
+            unprocessed_articles = total_articles - processed_articles
+            
+            # Articles with confirmed tickers
+            articles_with_tickers = conn.execute("""
+                SELECT COUNT(DISTINCT a.id) 
+                FROM articles a 
+                INNER JOIN news_tickers nt ON nt.news_id = a.id AND nt.confirmed = 1
+            """).fetchone()[0]
+            
+            return {
+                'total': total_articles,
+                'processed': processed_articles,
+                'unprocessed': unprocessed_articles,
+                'with_tickers': articles_with_tickers
+            }
+    except Exception as e:
+        logger.warning("Could not get news statistics: %s", e)
+        return {
+            'total': 0,
+            'processed': 0,
+            'unprocessed': 0,
+            'with_tickers': 0
+        }
+
 def initialize_pipeline():
     """Initialize the pipeline with configuration."""
     try:
@@ -449,6 +484,23 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["🚀 Batch Processing", "✅ Candidate 
 with tab1:
     st.header("Batch Processing")
     
+    # News statistics
+    stats = get_news_statistics(session_state.repository)
+    
+    # Display statistics
+    col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 0.5])
+    with col1:
+        st.metric("Total Articles", stats['total'])
+    with col2:
+        st.metric("Processed", stats['processed'])
+    with col3:
+        st.metric("Unprocessed", stats['unprocessed'])
+    with col4:
+        st.metric("With Tickers", stats['with_tickers'])
+    with col5:
+        if st.button("🔄", help="Refresh statistics", key="refresh_stats_button"):
+            st.rerun()
+    
     # Processing mode selection
     col1, col2 = st.columns(2)
     
@@ -457,22 +509,58 @@ with tab1:
             "Processing Mode",
             options=[BatchMode.ONLY_UNPROCESSED, BatchMode.RECHECK_ALL, BatchMode.RECHECK_SELECTED_RANGE],
             format_func=lambda x: {
-                BatchMode.ONLY_UNPROCESSED: "Only Unprocessed News",
-                BatchMode.RECHECK_ALL: "Recheck All News",
+                BatchMode.ONLY_UNPROCESSED: f"Only Unprocessed News ({stats['unprocessed']} of {stats['total']})",
+                BatchMode.RECHECK_ALL: f"Recheck All News ({stats['total']} total)",
                 BatchMode.RECHECK_SELECTED_RANGE: "Recheck Selected Range",
             }[x],
             key="processing_mode_selectbox"
         )
     
     with col2:
+        # Calculate default batch size based on mode and available articles
+        if mode == BatchMode.ONLY_UNPROCESSED:
+            if stats['unprocessed'] > 0:
+                default_batch_size = min(session_state.config.batch_size, stats['unprocessed'])
+            else:
+                default_batch_size = 1  # Default to 1 when no unprocessed articles
+        else:
+            default_batch_size = min(session_state.config.batch_size, stats['total'])
+        
+        # Set minimum value based on available articles
+        min_batch_size = 1
+        if mode == BatchMode.ONLY_UNPROCESSED and stats['unprocessed'] == 0:
+            min_batch_size = 1
+        elif mode == BatchMode.RECHECK_ALL and stats['total'] == 0:
+            min_batch_size = 1
+        else:
+            min_batch_size = 1
+        
         batch_size = st.number_input(
             "Batch Size",
-            min_value=1,
+            min_value=min_batch_size,
             max_value=10000,
-            value=session_state.config.batch_size,
+            value=default_batch_size,
             help="Number of news items to process in this batch",
             key="batch_size_input"
         )
+    
+    # Show processing info
+    if mode == BatchMode.ONLY_UNPROCESSED:
+        if stats['unprocessed'] > 0:
+            actual_batch_size = min(batch_size, stats['unprocessed'])
+            progress_ratio = stats['processed'] / stats['total'] if stats['total'] > 0 else 0
+            st.info(f"📊 Will process {actual_batch_size} unprocessed articles out of {stats['unprocessed']} total unprocessed")
+            st.progress(progress_ratio, text=f"Overall progress: {stats['processed']}/{stats['total']} articles processed ({progress_ratio:.1%})")
+        else:
+            st.success("✅ All articles have been processed!")
+    elif mode == BatchMode.RECHECK_ALL:
+        if stats['total'] > 0:
+            actual_batch_size = min(batch_size, stats['total'])
+            st.info(f"📊 Will recheck {actual_batch_size} articles out of {stats['total']} total")
+        else:
+            st.info("📭 No articles found in database.")
+    elif mode == BatchMode.RECHECK_SELECTED_RANGE:
+        st.info(f"📊 Will recheck articles in the selected date range (batch size: {batch_size})")
     
     # Range selection for RECHECK_SELECTED_RANGE mode
     if mode == BatchMode.RECHECK_SELECTED_RANGE:
@@ -518,8 +606,24 @@ with tab1:
     # Processing controls
     col7, col8, col9 = st.columns(3)
     
+    # Check if there are articles to process
+    can_process = False
+    if mode == BatchMode.ONLY_UNPROCESSED:
+        can_process = stats['unprocessed'] > 0
+    elif mode == BatchMode.RECHECK_ALL:
+        can_process = stats['total'] > 0
+    elif mode == BatchMode.RECHECK_SELECTED_RANGE:
+        can_process = True  # We can't check date range without querying
+    
     with col7:
-        if st.button("🚀 Start Processing", disabled=session_state.processing_status == "running", key="start_processing_button"):
+        if not can_process:
+            if mode == BatchMode.ONLY_UNPROCESSED and stats['unprocessed'] == 0:
+                st.info("✅ All articles have been processed! No unprocessed articles to process.")
+            elif mode == BatchMode.RECHECK_ALL and stats['total'] == 0:
+                st.info("📭 No articles found in database.")
+            else:
+                st.info("No articles available for processing in the selected mode.")
+        elif st.button("🚀 Start Processing", disabled=session_state.processing_status == "running", key="start_processing_button"):
             if session_state.processing_status == "running":
                 st.warning("Processing is already running!")
             else:
@@ -565,7 +669,21 @@ with tab1:
                     # Display results
                     st.success("Processing completed successfully!")
                     
-                    # Show metrics
+                    # Update and show current statistics
+                    updated_stats = get_news_statistics(session_state.repository)
+                    st.subheader("📊 Updated Statistics")
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Total Articles", updated_stats['total'])
+                    with col2:
+                        st.metric("Processed", updated_stats['processed'])
+                    with col3:
+                        st.metric("Unprocessed", updated_stats['unprocessed'])
+                    with col4:
+                        st.metric("With Tickers", updated_stats['with_tickers'])
+                    
+                    # Show processing metrics
+                    st.subheader("🚀 Processing Results")
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
                         st.metric("Total News", metrics.total_news)
@@ -746,16 +864,22 @@ with tab2:
         rejected_count = len(df[df['confirmed'] == -1])
         unconfirmed_count = len(df[df['confirmed'] == 0])
         
-        col1, col2, col3 = st.columns(3)
+        # Get total rejected count from database
+        with session_state.repository.connect() as conn:
+            total_rejected_count = conn.execute("SELECT COUNT(*) FROM news_tickers WHERE confirmed = -1").fetchone()[0]
+        
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Confirmed", confirmed_count)
         with col2:
             st.metric("Rejected", rejected_count)
         with col3:
             st.metric("Unconfirmed", unconfirmed_count)
+        with col4:
+            st.metric("Total Rejected", total_rejected_count)
         
         # Batch actions
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             if st.button("✅ Confirm All High Score", key="confirm_all_high_score_button"):
                 high_score_threshold = st.slider(
@@ -824,6 +948,85 @@ with tab2:
                     if 'candidates_data' in st.session_state:
                         del st.session_state.candidates_data
                     st.rerun()
+        
+        with col4:
+            if st.button("❌ Reject All", key="reject_all_button", type="secondary"):
+                st.warning("⚠️ This will mark ALL candidates as rejected (they will be hidden from the list but can be reprocessed later)!")
+                if st.checkbox("I understand this action will hide all candidates", key="reject_all_confirm_checkbox"):
+                    if st.button("❌ CONFIRM REJECT ALL", key="confirm_reject_all_button", type="primary"):
+                        with st.spinner("Rejecting all candidates..."):
+                            try:
+                                rejected_count = session_state.repository.reject_all_candidates(
+                                    operator=st.session_state.get("user_name", "unknown")
+                                )
+                                st.warning(f"❌ Rejected {rejected_count} candidates! They are now hidden but can be reprocessed.")
+                                # Clear cache and refresh
+                                if 'candidates_data' in st.session_state:
+                                    del st.session_state.candidates_data
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error rejecting candidates: {e}")
+    
+    # Additional actions for displayed candidates
+    if candidates:
+        st.subheader("Actions for Displayed Candidates")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("🗑️ Delete Displayed", key="delete_displayed_button", type="secondary"):
+                st.warning(f"⚠️ This will permanently delete {len(df)} displayed candidates!")
+                if st.checkbox("I understand this action cannot be undone", key="delete_displayed_confirm_checkbox"):
+                    if st.button("🗑️ CONFIRM DELETE DISPLAYED", key="confirm_delete_displayed_button", type="primary"):
+                        with st.spinner("Deleting displayed candidates..."):
+                            try:
+                                deleted_count = 0
+                                for idx, candidate in df.iterrows():
+                                    candidate_dict = candidate.to_dict()
+                                    candidate_id = candidate_dict.get('id', 0)
+                                    if candidate_id > 0:
+                                        with session_state.repository.connect() as conn:
+                                            conn.execute("DELETE FROM news_tickers WHERE id = ?", (candidate_id,))
+                                            conn.commit()
+                                        deleted_count += 1
+                                
+                                st.error(f"🗑️ Deleted {deleted_count} displayed candidates!")
+                                # Clear cache and refresh
+                                if 'candidates_data' in st.session_state:
+                                    del st.session_state.candidates_data
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error deleting displayed candidates: {e}")
+        
+        with col2:
+            if st.button("📊 Show Statistics", key="show_stats_button"):
+                st.info(f"**Displayed Candidates Statistics:**")
+                st.write(f"• Total displayed: {len(df)}")
+                st.write(f"• Confirmed: {confirmed_count}")
+                st.write(f"• Rejected: {rejected_count}")
+                st.write(f"• Unconfirmed: {unconfirmed_count}")
+                st.write(f"• Score range: {df['score'].min():.3f} - {df['score'].max():.3f}")
+                st.write(f"• Average score: {df['score'].mean():.3f}")
+        
+        with col3:
+            if total_rejected_count > 0:
+                if st.button(f"🔄 Restore Rejected ({total_rejected_count})", key="restore_rejected_button", type="secondary"):
+                    st.info(f"This will restore {total_rejected_count} rejected candidates to unconfirmed status so they can be reviewed again.")
+                    if st.checkbox("I want to restore rejected candidates", key="restore_rejected_confirm_checkbox"):
+                        if st.button("🔄 CONFIRM RESTORE", key="confirm_restore_button", type="primary"):
+                            with st.spinner("Restoring rejected candidates..."):
+                                try:
+                                    restored_count = session_state.repository.reset_rejected_candidates(
+                                        operator=st.session_state.get("user_name", "unknown")
+                                    )
+                                    st.success(f"🔄 Restored {restored_count} rejected candidates! They are now available for review.")
+                                    # Clear cache and refresh
+                                    if 'candidates_data' in st.session_state:
+                                        del st.session_state.candidates_data
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error restoring candidates: {e}")
+            else:
+                st.info("No rejected candidates to restore")
         
         # Individual candidate validation
         st.subheader("Individual Validation")

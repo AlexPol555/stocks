@@ -220,10 +220,9 @@ with control_col:
                 try:
                     # Import here to avoid circular imports
                     from core.news_pipeline.repository import NewsPipelineRepository
-                    from core.news_pipeline.config import load_pipeline_config
                     
-                    config = load_pipeline_config()
-                    repository = NewsPipelineRepository(config.database_path)
+                    # Create repository (it will get database path from settings)
+                    repository = NewsPipelineRepository()
                     
                     # Check if we have confirmed tickers
                     with repository.connect() as conn:
