@@ -15,8 +15,8 @@ from core import news, ui
 
 
 @st.cache_data(ttl=60)
-def _load_articles(limit: int) -> List[Dict[str, Any]]:
-    return news.fetch_recent_articles(limit=limit)
+def _load_articles(limit: int, include_without_tickers: bool = False) -> List[Dict[str, Any]]:
+    return news.fetch_recent_articles(limit=limit, include_without_tickers=include_without_tickers)
 
 
 @st.cache_data(ttl=120)
@@ -207,6 +207,46 @@ with control_col:
         else:
             st.info("Лок уже свободен. Повторный запуск доступен.")
         _load_jobs.clear()
+    
+    # News Pipeline Integration
+    st.divider()
+    st.subheader("🔗 Интеграция с пайплайном новостей")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🔄 Обновить тикеры", use_container_width=True):
+            with st.spinner("Обновляем тикеры из пайплайна..."):
+                try:
+                    # Import here to avoid circular imports
+                    from core.news_pipeline.repository import NewsPipelineRepository
+                    from core.news_pipeline.config import load_pipeline_config
+                    
+                    config = load_pipeline_config()
+                    repository = NewsPipelineRepository(config.database_path)
+                    
+                    # Check if we have confirmed tickers
+                    with repository.connect() as conn:
+                        confirmed_count = conn.execute("""
+                            SELECT COUNT(*) FROM news_tickers WHERE confirmed = 1
+                        """).fetchone()[0]
+                        
+                        if confirmed_count > 0:
+                            st.success(f"Найдено {confirmed_count} подтвержденных связей новостей с тикерами")
+                            # Clear cache to refresh data
+                            _load_articles.clear()
+                            _load_sources.clear()
+                            _load_jobs.clear()
+                            st.rerun()
+                        else:
+                            st.warning("Нет подтвержденных связей новостей с тикерами. Запустите пайплайн новостей.")
+                            
+                except Exception as e:
+                    st.error(f"Ошибка обновления тикеров: {e}")
+    
+    with col2:
+        if st.button("🔗 Открыть пайплайн", use_container_width=True):
+            st.info("Перейдите на страницу '🔍 News Pipeline' для управления кандидатами-тикерами")
 
 with summary_col:
     st.caption("Источник списка RSS можно настроить в config/news_parser.json или переменных окружения.")
@@ -218,13 +258,26 @@ ui.section_title("Свежие публикации", "последние зап
 feed_limit = st.slider("Количество новостей", min_value=5, max_value=100, value=25, step=5)
 articles = []
 try:
-    articles = _load_articles(feed_limit)
+    # Load articles with tickers by default, but allow showing all articles
+    show_all_articles = st.checkbox("Показать все статьи (включая без тикеров)", value=False, key="show_all_articles_checkbox")
+    articles = _load_articles(feed_limit, include_without_tickers=show_all_articles)
 except Exception as exc:  # pragma: no cover - UI feedback
     st.error(f"Не удалось загрузить список статей: {exc}")
 
 if not articles:
     st.info("В базе пока нет новостей. Запустите парсер, чтобы заполнить ленту.")
 else:
+    # Debug information
+    with st.expander("🔍 Отладочная информация"):
+        st.write(f"**Загружено статей:** {len(articles)}")
+        articles_with_tickers = [a for a in articles if a.get("tickers")]
+        st.write(f"**Статей с тикерами:** {len(articles_with_tickers)}")
+        
+        if articles_with_tickers:
+            st.write("**Примеры статей с тикерами:**")
+            for i, article in enumerate(articles_with_tickers[:3]):
+                st.write(f"{i+1}. {article['title'][:50]}... - Тикеры: {article['tickers']}")
+    
     for article in articles:
         container = st.container()
         title = article.get("title") or "Без названия"

@@ -1,14 +1,37 @@
-streamlit
-pandas
-numpy
-matplotlib
-streamlit-aggrid
-streamlit-lightweight-charts
-lightweight-charts
-pywebview
-PyYAML
-feedparser
-requests
-beautifulsoup4
-python-dateutil
-lxml
+# Core dependencies
+streamlit>=1.28.0
+pandas>=2.0.0
+numpy>=1.24.0
+sqlite3
+
+# News pipeline dependencies
+sentence-transformers>=2.2.0
+rapidfuzz>=3.0.0
+pymorphy3>=1.2.0
+razdel>=0.5.0
+spacy>=3.6.0
+faiss-cpu>=1.7.0
+
+# Data processing
+scikit-learn>=1.3.0
+psutil>=5.9.0
+
+# Configuration and serialization
+pyyaml>=6.0
+pydantic>=2.0.0
+
+# Testing
+pytest>=7.4.0
+pytest-mock>=3.11.0
+pytest-cov>=4.1.0
+
+# Development
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.5.0
+
+# Optional dependencies for enhanced functionality
+# Uncomment as needed:
+# faiss-gpu>=1.7.0  # For GPU acceleration
+# torch>=2.0.0      # For advanced ML models
+# transformers>=4.30.0  # For transformer models

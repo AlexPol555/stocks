@@ -1,0 +1,78 @@
+# News Pipeline Configuration
+# Масштабируемый пайплайн для генерации кандидатов-тикеров
+
+# Batch processing settings
+batch_size: 100
+chunk_size: 50
+
+# Scoring thresholds
+auto_apply_threshold: 0.85
+review_lower_threshold: 0.60
+
+# Fuzzy matching
+fuzzy_threshold: 65
+
+# Cosine similarity thresholds
+cos_candidate_threshold: 0.60
+cos_auto_threshold: 0.80
+
+# Retry settings
+max_retries: 2
+retry_backoff_seconds: 2.0
+
+# Embedding model
+embedding_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
+# Performance settings
+use_faiss: false
+cache_embeddings: true
+progress_refresh_interval: 0.5
+
+# Auto-apply settings
+auto_apply_confirm: true
+allow_confirmed_overwrite: false
+
+# History and audit
+history_keep_max: 10
+
+# Generator weights (for hybrid generator)
+generator_weights:
+  substring:
+    weight: 1.0
+  fuzzy:
+    weight: 0.8
+  ner:
+    weight: 0.7
+  embedding:
+    weight: 0.6
+
+# Monitoring and alerting
+monitoring:
+  enabled: true
+  metrics_retention_days: 30
+  health_check_interval: 300  # 5 minutes
+  alert_thresholds:
+    error_rate: 0.1
+    system_load: 0.8
+    memory_usage: 0.9
+    disk_usage: 0.9
+    processing_time: 300.0
+    no_successful_runs: 86400  # 24 hours
+
+# Logging
+logging:
+  level: INFO
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/news_pipeline.log"
+  max_size: 10485760  # 10MB
+  backup_count: 5
+
+# Development settings
+dry_run: false
+version: "v1.0"
+
+# Extra configuration
+extra:
+  debug: false
+  profile: false
+  experimental_features: false

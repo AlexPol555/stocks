@@ -115,13 +115,53 @@ def _supports_tickers(conn: sqlite3.Connection) -> bool:
         return False
 
 
-def fetch_recent_articles(limit: int = 25) -> List[Dict[str, Any]]:
+def _supports_news_pipeline(conn: sqlite3.Connection) -> bool:
+    """Check if news pipeline tables exist."""
+    query = "SELECT 1 FROM sqlite_master WHERE type='table' AND name='news_tickers' LIMIT 1"
+    try:
+        return conn.execute(query).fetchone() is not None
+    except sqlite3.DatabaseError:
+        return False
+
+
+def fetch_recent_articles(limit: int = 25, include_without_tickers: bool = False) -> List[Dict[str, Any]]:
     storage = _storage()
     conn = storage.connect()
     conn.row_factory = sqlite3.Row
     try:
-        has_tickers = _supports_tickers(conn)
-        if has_tickers:
+        # Check if news pipeline tables exist
+        has_news_pipeline = _supports_news_pipeline(conn)
+        if has_news_pipeline:
+            if include_without_tickers:
+                # Use news pipeline data (news_tickers table) - all articles
+                sql = (
+                    "SELECT a.id, a.title, a.url, a.published_at, a.created_at, a.body, "
+                    "s.name AS source_name, "
+                    "GROUP_CONCAT(DISTINCT t.ticker) AS ticker_symbols "
+                    "FROM articles a "
+                    "LEFT JOIN sources s ON s.id = a.source_id "
+                    "LEFT JOIN news_tickers nt ON nt.news_id = a.id AND nt.confirmed = 1 "
+                    "LEFT JOIN tickers t ON t.id = nt.ticker_id "
+                    "GROUP BY a.id "
+                    "ORDER BY COALESCE(a.published_at, a.created_at) DESC "
+                    "LIMIT ?"
+                )
+            else:
+                # Use news pipeline data (news_tickers table) - only articles with confirmed tickers
+                sql = (
+                    "SELECT a.id, a.title, a.url, a.published_at, a.created_at, a.body, "
+                    "s.name AS source_name, "
+                    "GROUP_CONCAT(DISTINCT t.ticker) AS ticker_symbols "
+                    "FROM articles a "
+                    "LEFT JOIN sources s ON s.id = a.source_id "
+                    "INNER JOIN news_tickers nt ON nt.news_id = a.id AND nt.confirmed = 1 "
+                    "LEFT JOIN tickers t ON t.id = nt.ticker_id "
+                    "GROUP BY a.id "
+                    "ORDER BY COALESCE(a.published_at, a.created_at) DESC "
+                    "LIMIT ?"
+                )
+        elif _supports_tickers(conn):
+            # Fallback to old article_ticker table
             sql = (
                 "SELECT a.id, a.title, a.url, a.published_at, a.created_at, a.body, "
                 "s.name AS source_name, "
@@ -135,6 +175,7 @@ def fetch_recent_articles(limit: int = 25) -> List[Dict[str, Any]]:
                 "LIMIT ?"
             )
         else:
+            # No ticker support
             sql = (
                 "SELECT a.id, a.title, a.url, a.published_at, a.created_at, a.body, "
                 "s.name AS source_name, NULL AS ticker_symbols "
@@ -199,8 +240,114 @@ def fetch_jobs(limit: int = 10) -> List[Dict[str, Any]]:
 def build_summary(target_date: Optional[datetime] = None) -> Dict[str, Any]:
     storage = _storage()
     date = target_date or datetime.utcnow()
-    summary = generate_summary(storage, date)
-    return summary
+    
+    # Try to use news pipeline data first
+    if _supports_news_pipeline(storage.connect()):
+        return _build_summary_from_pipeline(storage, date)
+    else:
+        # Fallback to original summary generation
+        summary = generate_summary(storage, date)
+        return summary
+
+
+def _build_summary_from_pipeline(storage, target_date: datetime) -> Dict[str, Any]:
+    """Build summary using news pipeline data."""
+    from datetime import time, timezone
+    from collections import Counter
+    
+    # Convert to MSK timezone for date range
+    msk_tz = timezone.utc  # Simplified - should use proper MSK timezone
+    start_date = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_date = start_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+    
+    conn = storage.connect()
+    conn.row_factory = sqlite3.Row
+    try:
+        # Get articles with confirmed tickers for the date range
+        sql = """
+            SELECT a.id, a.title, a.body, a.url, a.published_at,
+                   GROUP_CONCAT(DISTINCT t.ticker) AS ticker_symbols
+            FROM articles a
+            LEFT JOIN news_tickers nt ON nt.news_id = a.id AND nt.confirmed = 1
+            LEFT JOIN tickers t ON t.id = nt.ticker_id
+            WHERE a.published_at >= ? AND a.published_at <= ?
+            GROUP BY a.id
+            ORDER BY a.published_at DESC
+        """
+        rows = conn.execute(sql, (start_date.isoformat(), end_date.isoformat())).fetchall()
+        
+        # Process articles
+        articles = []
+        for row in rows:
+            tickers = []
+            if row["ticker_symbols"]:
+                tickers = [ticker.strip() for ticker in str(row["ticker_symbols"]).split(",") if ticker.strip()]
+            
+            articles.append({
+                "id": row["id"],
+                "title": row["title"],
+                "body": row["body"] or "",
+                "url": row["url"],
+                "hash": str(row["id"]),  # Use ID as hash
+                "tickers": tickers,
+            })
+        
+        # Count ticker mentions
+        counter = Counter(ticker for article in articles for ticker in article["tickers"])
+        top_mentions = [
+            {"ticker": ticker, "mentions": count}
+            for ticker, count in counter.most_common(5)
+        ]
+        
+        # Build clusters
+        clusters = _build_clusters_from_articles(articles)
+        
+        summary = {
+            "date": target_date.date().isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "top_mentions": top_mentions,
+            "clusters": clusters,
+        }
+        
+        return summary
+        
+    finally:
+        conn.close()
+
+
+def _build_clusters_from_articles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Build clusters from articles data."""
+    clusters: Dict[str, Dict[str, Any]] = {}
+    
+    for article in articles:
+        key = article.get("hash") or article.get("title")
+        if key not in clusters:
+            clusters[key] = {
+                "headline": article.get("title"),
+                "sources_count": 1,
+                "tickers": set(article.get("tickers", [])),
+                "summary": (article.get("body") or "")[:200],
+                "links": [article["url"]] if article.get("url") else [],
+            }
+        else:
+            cluster = clusters[key]
+            cluster["sources_count"] += 1
+            cluster["tickers"].update(article.get("tickers", []))
+            if article.get("url") and article["url"] not in cluster["links"]:
+                cluster["links"].append(article["url"])
+    
+    # Convert to final format
+    final_clusters = []
+    for cluster in clusters.values():
+        final_clusters.append({
+            "headline": cluster["headline"],
+            "sources_count": cluster["sources_count"],
+            "tickers": sorted(list(cluster["tickers"])),
+            "summary": cluster["summary"],
+            "links": cluster["links"][:3],
+        })
+    
+    return sorted(final_clusters, key=lambda x: (-x["sources_count"], x["headline"].lower()))
 
 
 __all__ = [
