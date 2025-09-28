@@ -28,6 +28,14 @@ from .visualization import (
     safe_plot_interactive,
     safe_plot_matplotlib,
 )
+from .notifications import (
+    notify_signal,
+    notify_error,
+    notify_critical,
+    notify_trade,
+    notification_manager,
+    dashboard_alerts,
+)
 
 __all__ = [
     "StockAnalyzer",
@@ -50,6 +58,12 @@ __all__ = [
     "incremental_populate_database_from_csv",
     "load_csv_data",
     "normalize_ticker",
+    "notify_signal",
+    "notify_error",
+    "notify_critical",
+    "notify_trade",
+    "notification_manager",
+    "dashboard_alerts",
     "plot_daily_analysis",
     "plot_interactive_chart",
     "plot_stock_analysis",

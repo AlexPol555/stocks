@@ -13,6 +13,10 @@ from .optimisation import (
 )
 from .scoring import ScoringConfig, ScoreWeights, compute_signal_scores
 from .risk import TradeRecord, apply_risk_management, simulate_trades
+from .signal_filters import SignalFilter, FilterConfig, create_adaptive_filter
+from .auto_trader import AutoTrader, TradingSession
+from .advanced_risk import AdvancedRiskManager, RiskProfile, Position
+from .trading_engine import TradingEngine
 from .workflows import (
     run_cross_validation_workflow,
     run_walk_forward_workflow,
@@ -41,4 +45,13 @@ __all__ = [
     "simulate_trades",
     "apply_risk_management",
     "walk_forward_optimize",
+    "SignalFilter",
+    "FilterConfig",
+    "create_adaptive_filter",
+    "AutoTrader",
+    "TradingSession",
+    "AdvancedRiskManager",
+    "RiskProfile",
+    "Position",
+    "TradingEngine",
 ]

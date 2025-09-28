@@ -1,0 +1,105 @@
+# Configuration for notifications system
+
+# Telegram Bot Settings
+telegram:
+  enabled: true
+  bot_token: "${TELEGRAM_BOT_TOKEN}"  # Set via environment variable
+  chat_id: "${TELEGRAM_CHAT_ID}"      # Set via environment variable
+  rate_limit_seconds: 1               # Minimum interval between messages
+  max_queue_size: 50                  # Maximum messages in queue
+
+# Dashboard Notifications
+dashboard:
+  enabled: true
+  max_notifications: 100              # Maximum notifications to keep
+  cleanup_hours: 24                   # Remove notifications older than this
+  show_badge: true                    # Show notification badge in sidebar
+
+# Health Checks
+health_checks:
+  enabled: true
+  interval_minutes: 5                 # Run health checks every N minutes
+  timeout_seconds: 30                 # Timeout for individual checks
+  critical_thresholds:
+    disk_usage_percent: 95
+    memory_usage_percent: 95
+    cpu_usage_percent: 90
+  warning_thresholds:
+    disk_usage_percent: 85
+    memory_usage_percent: 85
+    cpu_usage_percent: 80
+
+# Metrics Collection
+metrics:
+  enabled: true
+  collection_interval_seconds: 60     # Collect metrics every N seconds
+  max_history: 1000                   # Maximum historical data points
+  alert_thresholds:
+    cpu_percent: 90
+    memory_percent: 95
+    disk_percent: 95
+    process_memory_mb: 1024
+
+# Notification Types
+notification_types:
+  signal:
+    enabled: true
+    priority: 3                       # High priority
+    channels: ["dashboard", "telegram"]
+  
+  error:
+    enabled: true
+    priority: 2                       # Medium priority
+    channels: ["dashboard", "telegram"]
+  
+  critical:
+    enabled: true
+    priority: 4                       # Critical priority
+    channels: ["dashboard", "telegram"]
+    force_send: true                  # Bypass rate limiting
+  
+  trade_executed:
+    enabled: true
+    priority: 3                       # High priority
+    channels: ["dashboard", "telegram"]
+  
+  daily_report:
+    enabled: true
+    priority: 1                       # Low priority
+    channels: ["dashboard", "telegram"]
+    schedule: "09:00"                 # Send at 9 AM daily
+  
+  health_check:
+    enabled: true
+    priority: 1                       # Low priority (healthy) / 2 (unhealthy)
+    channels: ["dashboard", "telegram"]
+    only_unhealthy: true              # Only send unhealthy status
+
+# Message Templates
+message_templates:
+  signal:
+    title: "Сигнал {signal_type}"
+    message: "{emoji} {ticker}: {action} по цене {price:.2f}"
+  
+  error:
+    title: "Ошибка в {component}"
+    message: "{error_type}: {error_message}"
+  
+  critical:
+    title: "КРИТИЧЕСКОЕ СОБЫТИЕ: {critical_type}"
+    message: "{message}"
+  
+  trade_executed:
+    title: "Сделка выполнена"
+    message: "{emoji} {ticker}: {action} {quantity} шт. по {price:.2f} (сумма: {total_value:.2f})"
+  
+  daily_report:
+    title: "Ежедневный отчет"
+    message: "📊 Всего сигналов: {total_signals}\n💰 Сделок выполнено: {trades_executed}\n📈 P/L: {profit_loss:.2f}"
+
+# Logging
+logging:
+  level: "INFO"
+  log_notifications: true
+  log_health_checks: true
+  log_metrics: false

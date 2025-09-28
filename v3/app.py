@@ -26,6 +26,11 @@ _default_visibility = {
     "Data_Load": True,
     "Auto_Update": True,
     "Orders": True,
+    "Auto_Trading": True,
+    "Scheduler": True,
+    "ML_AI": True,
+    "ML_Management": True,
+    "Multi_Timeframe": True,
     "Demo_Stats": True,
     "Lightweight_Chart": True,
     "News": True,
@@ -46,6 +51,11 @@ NAV_GROUPS = [
             ("Data_Load", "📥 Загрузка данных", "pages/3_📥_Data_Load.py"),
             ("Auto_Update", "🔁 Автообновление", "pages/4_🔁_Auto_Update.py"),
             ("Orders", "🛒 Ордеры", "pages/5_🛒_Orders.py"),
+            ("Auto_Trading", "🤖 Автоторговля", "pages/11_🤖_Auto_Trading.py"),
+            ("Scheduler", "📅 Планировщик", "pages/12_📅_Scheduler.py"),
+            ("ML_AI", "🤖 ML & AI", "pages/15_🤖_ML_AI.py"),
+            ("ML_Management", "🔧 ML Management", "pages/17_🤖_ML_Management.py"),
+            ("Multi_Timeframe", "⏰ Multi-Timeframe", "pages/18_⏰_Multi_Timeframe.py"),
             ("News", "🗞️ Новости", "pages/8_🗞️_News.py"),
         ],
     ),
@@ -72,8 +82,40 @@ for group_title, links in NAV_GROUPS:
             st.sidebar.page_link(path, label=label)
     st.sidebar.divider()
 
+# Scheduler status in sidebar
+if 'scheduler' not in st.session_state:
+    try:
+        from core.scheduler import RealSchedulerIntegration
+        api_key = st.session_state.get('tinkoff_api_key')
+        st.session_state.scheduler = RealSchedulerIntegration(api_key)
+    except Exception as e:
+        st.session_state.scheduler = None
+
+if st.session_state.scheduler:
+    st.sidebar.divider()
+    st.sidebar.markdown("### 📅 Планировщик")
+    
+    try:
+        status = st.session_state.scheduler.get_status()
+        if status:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.sidebar.metric("Задач", status.get('total_tasks', 0))
+            with col2:
+                st.sidebar.metric("Активных", status.get('enabled_tasks', 0))
+                
+            if status.get('running', False):
+                st.sidebar.success("🟢 Работает")
+            else:
+                st.sidebar.error("🔴 Остановлен")
+                
+            if st.sidebar.button("Управление"):
+                st.switch_page("pages/12_📅_Scheduler.py")
+    except Exception as e:
+        st.sidebar.warning("Планировщик недоступен")
+
 st.sidebar.markdown("**Подсказки**")
-st.sidebar.caption("• Обновите расчёты на вкладке 'Автообновление'\n• Управляйте доступом к страницам через настройки")
+st.sidebar.caption("• Обновите расчёты на вкладке 'Автообновление'\n• Управляйте доступом к страницам через настройки\n• Используйте планировщик для автоматизации задач")
 
 ui.page_header(
     "Stocks Studio",
@@ -91,19 +133,22 @@ quick_left, quick_right = st.columns(2)
 with quick_left:
     st.markdown(
         "- Перейдите в раздел **📊 Дашборд**, чтобы посмотреть свежие сигналы и позиции.\n"
-        "- Используйте **🧮 Аналитику**, чтобы углубиться в показатели индикаторов." 
+        "- Используйте **🧮 Аналитику**, чтобы углубиться в показатели индикаторов.\n"
+        "- Настройте **📅 Планировщик** для автоматизации задач." 
     )
 with quick_right:
     st.markdown(
         "- Внесите новые данные через **📥 Загрузку**, затем запустите **🔁 Автообновление**.\n"
-        "- Настройте доступность страниц и параметры демо-счёта в **⚙️ Настройках**."
+        "- Настройте доступность страниц и параметры демо-счёта в **⚙️ Настройках**.\n"
+        "- Используйте **🤖 Автоторговлю** для автоматических сделок."
     )
 
 st.divider()
 ui.section_title("Состояние приложения", "краткий чек-лист")
-status_cols = st.columns(3)
+status_cols = st.columns(4)
 status_cols[0].info("Данные хранятся в SQLite — убедитесь, что файл БД на месте.")
 status_cols[1].info("API-ключ Tinkoff нужен для отправки реальных ордеров.")
 status_cols[2].info("Демо-модуль позволяет тестировать сделки без рисков.")
+status_cols[3].info("Планировщик автоматизирует выполнение задач по расписанию.")
 
 st.caption("Готово! Выберите страницу в сайдбаре, чтобы продолжить работу.")

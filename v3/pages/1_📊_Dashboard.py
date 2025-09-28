@@ -15,6 +15,20 @@ from core.analytics.metrics import TradingCosts
 from core.analytics.workflows import compute_kpi_for_signals
 from core.indicators import clear_get_calculated_data, get_calculated_data
 from core.utils import extract_selected_rows, open_database_connection, read_db_path
+from core.notifications import dashboard_alerts
+
+# ML imports
+try:
+    from core.ml import create_ml_integration_manager, create_fallback_ml_manager
+    from core.ml.dashboard_widgets import MLDashboardWidgets
+    ML_AVAILABLE = True
+    print("✅ ML modules imported successfully")
+except ImportError as e:
+    ML_AVAILABLE = False
+    print(f"⚠️ ML modules not available: {e}")
+except Exception as e:
+    ML_AVAILABLE = False
+    print(f"⚠️ ML modules error: {e}")
 
 
 SIGNAL_DEFINITIONS = {
@@ -24,9 +38,79 @@ SIGNAL_DEFINITIONS = {
     "New Adaptive Sell": ("New_Adaptive_Sell_Signal", "Dynamic_Profit_New_Adaptive_Sell", "Exit_Date_New_Adaptive_Sell"),
     "Final Buy": ("Final_Buy_Signal", "Dynamic_Profit_Final_Buy", "Exit_Date_Final_Buy"),
     "Final Sell": ("Final_Sell_Signal", "Dynamic_Profit_Final_Sell", "Exit_Date_Final_Sell"),
+    # ML Signals
+    "ML Ensemble": ("ML_Ensemble_Signal", "ML_Ensemble_Profit", "ML_Ensemble_Exit"),
+    "ML Price": ("ML_Price_Signal", "ML_Price_Profit", "ML_Price_Exit"),
+    "ML Sentiment": ("ML_Sentiment_Signal", "ML_Sentiment_Profit", "ML_Sentiment_Exit"),
+    "ML Technical": ("ML_Technical_Signal", "ML_Technical_Profit", "ML_Technical_Exit"),
 }
 
 DEFAULT_SIGNAL_OPTIONS = tuple(SIGNAL_DEFINITIONS.keys())
+
+
+def _generate_ml_signals_for_data(df: pd.DataFrame, ml_manager) -> pd.DataFrame:
+    """Generate ML signals for the given dataframe."""
+    if not ML_AVAILABLE or df.empty:
+        return df
+    
+    try:
+        from core.ml.signals import MLSignalGenerator
+        signal_generator = MLSignalGenerator(ml_manager)
+        
+        # Get unique symbols
+        symbols = df['contract_code'].unique()
+        
+        # Generate ML signals for each symbol
+        ml_signals_data = []
+        for symbol in symbols:
+            symbol_data = df[df['contract_code'] == symbol].copy()
+            if symbol_data.empty:
+                continue
+                
+            # Generate signals for the latest data point
+            latest_date = symbol_data['date'].max()
+            latest_data = symbol_data[symbol_data['date'] == latest_date]
+            
+            if not latest_data.empty:
+                signals = signal_generator.generate_ml_signals(symbol)
+                if 'error' not in signals:
+                    # Add ML signals to the data
+                    for idx in latest_data.index:
+                        ml_signals_data.append({
+                            'index': idx,
+                            'ML_Ensemble_Signal': 1 if signals.get('ml_ensemble_signal') in ['BUY', 'STRONG_BUY'] else -1 if signals.get('ml_ensemble_signal') in ['SELL', 'STRONG_SELL'] else 0,
+                            'ML_Price_Signal': 1 if signals.get('ml_price_signal') in ['BUY', 'STRONG_BUY'] else -1 if signals.get('ml_price_signal') in ['SELL', 'STRONG_SELL'] else 0,
+                            'ML_Sentiment_Signal': 1 if signals.get('ml_sentiment_signal') in ['BUY', 'STRONG_BUY'] else -1 if signals.get('ml_sentiment_signal') in ['SELL', 'STRONG_SELL'] else 0,
+                            'ML_Technical_Signal': 1 if signals.get('ml_technical_signal') in ['BUY', 'STRONG_BUY'] else -1 if signals.get('ml_technical_signal') in ['SELL', 'STRONG_SELL'] else 0,
+                            'ML_Ensemble_Profit': 0,  # Placeholder - would need actual profit calculation
+                            'ML_Price_Profit': 0,
+                            'ML_Sentiment_Profit': 0,
+                            'ML_Technical_Profit': 0,
+                            'ML_Ensemble_Exit': None,  # Placeholder - would need actual exit date
+                            'ML_Price_Exit': None,
+                            'ML_Sentiment_Exit': None,
+                            'ML_Technical_Exit': None,
+                        })
+        
+        # Add ML signals to dataframe
+        if ml_signals_data:
+            ml_df = pd.DataFrame(ml_signals_data)
+            ml_df.set_index('index', inplace=True)
+            
+            # Merge ML signals with original dataframe
+            for col in ['ML_Ensemble_Signal', 'ML_Price_Signal', 'ML_Sentiment_Signal', 'ML_Technical_Signal',
+                       'ML_Ensemble_Profit', 'ML_Price_Profit', 'ML_Sentiment_Profit', 'ML_Technical_Profit',
+                       'ML_Ensemble_Exit', 'ML_Price_Exit', 'ML_Sentiment_Exit', 'ML_Technical_Exit']:
+                if col in ml_df.columns:
+                    df[col] = ml_df[col]
+                else:
+                    df[col] = 0 if 'Signal' in col or 'Profit' in col else None
+        
+        return df
+        
+    except Exception as e:
+        logger.error(f"Error generating ML signals: {e}")
+        return df
 
 
 def _prepare_signal_kpi_dataset(
@@ -117,7 +201,10 @@ with st.sidebar:
     st.caption("Выбранные типы сигналов объединяются в общую выборку.")
 
     st.divider()
-    st.button("Очистить кэш расчётов", on_click=clear_get_calculated_data, use_container_width=True)
+    st.button("Очистить кэш расчётов", on_click=clear_get_calculated_data, width='stretch')
+    
+    # Display notification badge
+    dashboard_alerts.render_notification_badge()
 
 
 if not selected_signal_labels:
@@ -144,6 +231,14 @@ if df_all is None or df_all.empty:
     st.info("Нет рассчитанных данных. Загрузите историю и выполните обновление индикаторов.")
     st.stop()
 
+# Generate ML signals if available
+if ML_AVAILABLE and 'ml_manager' in st.session_state:
+    try:
+        df_all = _generate_ml_signals_for_data(df_all, st.session_state.ml_manager)
+    except Exception as e:
+        st.warning(f"ML signals generation failed: {e}")
+        # Continue without ML signals
+
 # populate sidebar selectors now that данные загружены
 with st.sidebar:
     unique_dates = sorted(df_all["date"].dropna().unique(), reverse=True)
@@ -157,6 +252,11 @@ account_snapshot = demo_trading.get_account_snapshot(conn)
 account_info = demo_trading.get_account(conn)
 account_currency = account_info.get("currency", "RUB")
 
+# Display notifications panel
+if st.session_state.get("show_notifications", False):
+    st.session_state["show_notifications"] = False
+    dashboard_alerts.render_notifications_panel(max_notifications=5)
+
 ui.section_title("Сводка демо-счёта", "метрики обновляются после операций")
 acct_cols = st.columns(4)
 acct_cols[0].metric("Свободный баланс", f"{_fmt_money(account_snapshot['balance'])} {account_currency}")
@@ -169,6 +269,96 @@ pl_cols[0].metric("Реализованный P/L", f"{_fmt_money(account_snapsh
 pl_cols[1].metric("Нереализованный P/L", f"{_fmt_money(account_snapshot['unrealized_pl'])} {account_currency}")
 pl_cols[2].metric("Итоговый P/L", f"{_fmt_money(account_snapshot['total_pl'])} {account_currency}")
 st.caption("Демо-счёт помогает проверить идеи перед реальными сделками.")
+
+# ML Analytics Section
+if ML_AVAILABLE:
+    try:
+        st.subheader("🤖 ML Analytics")
+        
+        # Initialize ML manager
+        if 'ml_manager' not in st.session_state:
+            try:
+                st.session_state.ml_manager = create_ml_integration_manager()
+                st.success("✅ Full ML functionality loaded")
+            except Exception as e:
+                st.session_state.ml_manager = create_fallback_ml_manager()
+                st.warning(f"⚠️ Using fallback ML mode: {e}")
+        
+        # Initialize ML widgets
+        ml_widgets = MLDashboardWidgets(st.session_state.ml_manager)
+        
+        # Get available tickers for ML analysis
+        available_tickers = st.session_state.ml_manager.get_available_tickers()
+        
+        if available_tickers:
+            st.success(f"✅ Found {len(available_tickers)} tickers for ML analysis")
+            
+            # ML Signals Section - show best performing tickers
+            col1, col2, col3 = st.columns([2, 1, 1])
+            
+            with col1:
+                st.info(f"🤖 Analyzing {len(available_tickers)} tickers and showing best ML signals")
+            
+            with col2:
+                if st.button("🔄 Refresh ML Signals", key="refresh_ml_signals_btn"):
+                    # Clear cache and regenerate
+                    st.session_state.ml_signals_refresh = True
+                    st.rerun()
+            
+            with col3:
+                if st.button("🗑️ Clear ML Cache", key="clear_ml_cache_btn"):
+                    # Clear ML cache
+                    from core.ml.cache import ml_cache_manager
+                    cleared = ml_cache_manager.clear_expired_cache()
+                    st.success(f"Cleared {cleared} expired cache entries")
+                    st.rerun()
+            
+            # Allow manual selection of tickers
+            if st.checkbox("🎯 Select specific tickers", key="manual_ticker_selection"):
+                manual_tickers = st.multiselect(
+                    "Choose tickers to analyze:",
+                    available_tickers,
+                    default=available_tickers[:10],  # Show first 10 by default
+                    key="manual_ticker_choice"
+                )
+                if manual_tickers:
+                    selected_tickers = manual_tickers
+                    st.info(f"🤖 Showing ML signals for {len(selected_tickers)} manually selected tickers")
+                else:
+                    selected_tickers = available_tickers
+            else:
+                selected_tickers = available_tickers
+            
+            # Check if we need to refresh (force cache miss)
+            use_cache = not st.session_state.get('ml_signals_refresh', False)
+            if st.session_state.get('ml_signals_refresh', False):
+                st.session_state.ml_signals_refresh = False
+            
+            import asyncio
+            asyncio.run(ml_widgets.render_ml_signals_section(selected_tickers, max_symbols=len(selected_tickers), use_cache=use_cache))
+            
+            # ML Analytics for selected ticker
+            if filter_mode == "By ticker" and selected_ticker:
+                ml_widgets.render_ml_analytics_section(selected_ticker)
+            
+            # ML Metrics Summary
+            ml_metrics = ml_widgets.render_ml_metrics_summary(available_tickers[:10])
+            if ml_metrics:
+                st.subheader("🤖 ML Metrics Summary")
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Total Signals", ml_metrics.get('total_signals', 0))
+                col2.metric("Buy Signals", ml_metrics.get('buy_signals', 0), f"{ml_metrics.get('buy_ratio', 0):.1%}")
+                col3.metric("Sell Signals", ml_metrics.get('sell_signals', 0), f"{ml_metrics.get('sell_ratio', 0):.1%}")
+                col4.metric("Avg Confidence", f"{ml_metrics.get('avg_confidence', 0):.1%}")
+        else:
+            st.info("🤖 ML Analytics: No tickers available for analysis. Load data first.")
+            
+    except Exception as e:
+        st.error(f"❌ ML Analytics error: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+else:
+    st.info("🤖 ML Analytics: Install ML dependencies to enable AI-powered trading signals.")
 
 # применяем фильтры
 filtered_df = df_all.copy()
@@ -244,7 +434,7 @@ if metrics_rows:
         "sortino": "Sortino",
         "max_drawdown": "Max DD %",
     }, inplace=True)
-    st.dataframe(kpi_df, use_container_width=True)
+    st.dataframe(kpi_df, width='stretch')
 
 
 ui.section_title("Лента сигналов", "таблица поддерживает сортировку и поиск")
@@ -253,7 +443,7 @@ try:
     from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode, JsCode
 except Exception:
     def AgGrid(df, gridOptions=None, height=400, fit_columns_on_grid_load=True, **kwargs):  # type: ignore
-        st.dataframe(df, use_container_width=True, height=height)
+        st.dataframe(df, width='stretch', height=height)
         return {"selected_rows": []}
     class GridOptionsBuilder:  # type: ignore
         def __init__(self, df=None): self._opts = {}
@@ -278,6 +468,11 @@ display_columns = [
     "Signal",
     "Adaptive_Buy_Signal",
     "Adaptive_Sell_Signal",
+    # ML Signals
+    "ML_Ensemble_Signal",
+    "ML_Price_Signal",
+    "ML_Sentiment_Signal",
+    "ML_Technical_Signal",
     "New_Adaptive_Buy_Signal",
     "New_Adaptive_Sell_Signal",
 ]
@@ -416,7 +611,7 @@ if selected_row is not None:
                     "Цена выхода": _fmt_number(selected_row.get(ecol)),
                 })
         if rows:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+            st.dataframe(pd.DataFrame(rows), width='stretch')
 
         with st.expander("Детали строки"):
             st.json(selected_row)
@@ -470,7 +665,7 @@ if selected_row is not None:
                     for col in metric_cols:
                         fig.add_trace(go.Scatter(x=metrics["date"], y=metrics[col], mode="lines", name=col))
                     fig.update_layout(margin=dict(l=0, r=0, t=10, b=0), height=280)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                 except Exception:
                     st.line_chart(metrics.set_index("date")[metric_cols])
         except Exception:
@@ -535,7 +730,7 @@ if selected_row is not None:
                             )
                         ])
                         fig.update_layout(xaxis_rangeslider_visible=True, margin=dict(l=0, r=0, t=10, b=0), height=360)
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width='stretch')
                     except Exception:
                         st.line_chart(ohlc.set_index("date")["close"])
         except Exception:
@@ -559,7 +754,7 @@ with tab_trades:
             trades_view["executed_at"] = trades_view["executed_at"].dt.strftime("%Y-%m-%d %H:%M:%S")
         except Exception:
             pass
-        st.dataframe(trades_view, use_container_width=True)
+        st.dataframe(trades_view, width='stretch')
         try:
             summary = trades_df.groupby("contract_code", as_index=False)[["quantity", "value", "realized_pl"]].sum()
             summary_cols = st.columns(3)
@@ -567,7 +762,7 @@ with tab_trades:
             summary_cols[1].metric("Оборот", _fmt_money(summary["value"].sum()))
             summary_cols[2].metric("Реализованный P/L", _fmt_money(trades_df["realized_pl"].sum()))
             st.caption("Сводка по тикерам — полезно оценивать распределение капитала.")
-            st.dataframe(summary, use_container_width=True)
+            st.dataframe(summary, width='stretch')
         except Exception:
             pass
 
@@ -580,7 +775,7 @@ with tab_positions:
         for col in numeric_cols:
             if col in positions_view.columns:
                 positions_view[col] = positions_view[col].astype(float)
-        st.dataframe(positions_view, use_container_width=True)
+        st.dataframe(positions_view, width='stretch')
         st.caption("Проверяйте рыночную стоимость и плавающий результат, чтобы держать контроль над риском.")
 
 st.divider()

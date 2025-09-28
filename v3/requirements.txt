@@ -2,7 +2,6 @@
 streamlit>=1.28.0
 pandas>=2.0.0
 numpy>=1.24.0
-sqlite3
 
 # News pipeline dependencies
 sentence-transformers>=2.2.0
@@ -30,8 +29,12 @@ black>=23.0.0
 flake8>=6.0.0
 mypy>=1.5.0
 
+# Machine Learning dependencies
+torch>=2.0.0
+transformers>=4.30.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
 # Optional dependencies for enhanced functionality
 # Uncomment as needed:
 # faiss-gpu>=1.7.0  # For GPU acceleration
-# torch>=2.0.0      # For advanced ML models
-# transformers>=4.30.0  # For transformer models

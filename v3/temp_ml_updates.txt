@@ -1,0 +1,147 @@
+﻿# РћР±РЅРѕРІР»СЏРµРј ML Model Manager РґР»СЏ РїРѕРґРґРµСЂР¶РєРё РјРЅРѕРіРѕСѓСЂРѕРІРЅРµРІС‹С… РґР°РЅРЅС‹С…
+
+def _get_stock_data_from_db(self, symbol: str, timeframe: str = '1d') -> pd.DataFrame:
+    """РџРѕР»СѓС‡РёС‚СЊ РґР°РЅРЅС‹Рµ Р°РєС†РёР№ РёР· Р‘Р” РґР»СЏ СѓРєР°Р·Р°РЅРЅРѕРіРѕ С‚Р°Р№РјС„СЂРµР№РјР°."""
+    
+    if timeframe == '1d':
+        # РСЃРїРѕР»СЊР·СѓРµРј СЃСѓС‰РµСЃС‚РІСѓСЋС‰СѓСЋ Р»РѕРіРёРєСѓ РґР»СЏ РґРЅРµРІРЅС‹С… РґР°РЅРЅС‹С…
+        return self._get_daily_data_from_db(symbol)
+    
+    # Р”Р»СЏ РґСЂСѓРіРёС… С‚Р°Р№РјС„СЂРµР№РјРѕРІ С‡РёС‚Р°РµРј РёР· СЃРѕРѕС‚РІРµС‚СЃС‚РІСѓСЋС‰РёС… С‚Р°Р±Р»РёС†
+    try:
+        from core.multi_timeframe_db import get_timeframe_data
+        
+        conn = get_connection(self.db_path)
+        data = get_timeframe_data(conn, symbol, timeframe)
+        conn.close()
+        
+        if data.empty:
+            logger.warning(f"No {timeframe} data found for {symbol}")
+            return data
+        
+        # Р”РѕР±Р°РІР»СЏРµРј С‚РµС…РЅРёС‡РµСЃРєРёРµ РёРЅРґРёРєР°С‚РѕСЂС‹
+        data = self._add_technical_indicators(data)
+        
+        return data
+        
+    except Exception as e:
+        logger.error(f"Error getting {timeframe} data for {symbol}: {e}")
+        return pd.DataFrame()
+
+
+def _get_daily_data_from_db(self, symbol: str) -> pd.DataFrame:
+    """РџРѕР»СѓС‡РёС‚СЊ РґРЅРµРІРЅС‹Рµ РґР°РЅРЅС‹Рµ РёР· Р‘Р” (СЃСѓС‰РµСЃС‚РІСѓСЋС‰Р°СЏ Р»РѕРіРёРєР°)."""
+    try:
+        conn = get_connection(self.db_path)
+        
+        # РџРѕР»СѓС‡Р°РµРј РґР°РЅРЅС‹Рµ РёР· daily_data
+        query = """
+            SELECT dd.date, dd.open, dd.high, dd.low, dd.close, dd.volume
+            FROM daily_data dd
+            JOIN companies c ON dd.company_id = c.id
+            WHERE c.contract_code = ?
+            ORDER BY dd.date DESC
+            LIMIT 1000
+        """
+        
+        df = pd.read_sql_query(query, conn, params=(symbol,))
+        conn.close()
+        
+        if df.empty:
+            return df
+        
+        # РљРѕРЅРІРµСЂС‚РёСЂСѓРµРј РґР°С‚Сѓ
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.sort_values('date').reset_index(drop=True)
+        
+        # Р”РѕР±Р°РІР»СЏРµРј С‚РµС…РЅРёС‡РµСЃРєРёРµ РёРЅРґРёРєР°С‚РѕСЂС‹
+        df = self._add_technical_indicators(df)
+        
+        return df
+        
+    except Exception as e:
+        logger.error(f"Error getting daily data for {symbol}: {e}")
+        return pd.DataFrame()
+
+
+def _add_technical_indicators(self, data: pd.DataFrame) -> pd.DataFrame:
+    """Р”РѕР±Р°РІРёС‚СЊ С‚РµС…РЅРёС‡РµСЃРєРёРµ РёРЅРґРёРєР°С‚РѕСЂС‹ Рє РґР°РЅРЅС‹Рј."""
+    try:
+        if data.empty:
+            return data
+        
+        # РџРµСЂРµРёРјРµРЅРѕРІС‹РІР°РµРј РєРѕР»РѕРЅРєРё РґР»СЏ СЃРѕРІРјРµСЃС‚РёРјРѕСЃС‚Рё
+        if 'datetime' in data.columns:
+            data = data.rename(columns={'datetime': 'date'})
+        
+        # Р”РѕР±Р°РІР»СЏРµРј С‚РµС…РЅРёС‡РµСЃРєРёРµ РёРЅРґРёРєР°С‚РѕСЂС‹
+        from core.analytics import calculate_technical_indicators
+        data = calculate_technical_indicators(data)
+        
+        return data
+        
+    except Exception as e:
+        logger.error(f"Error adding technical indicators: {e}")
+        return data
+
+
+def get_available_timeframes(self) -> List[str]:
+    """РџРѕР»СѓС‡РёС‚СЊ СЃРїРёСЃРѕРє РґРѕСЃС‚СѓРїРЅС‹С… С‚Р°Р№РјС„СЂРµР№РјРѕРІ."""
+    return ['1d', '1h', '1m', '5m', '15m', '1s', 'tick']
+
+
+def is_timeframe_supported(self, timeframe: str) -> bool:
+    """РџСЂРѕРІРµСЂРёС‚СЊ, РїРѕРґРґРµСЂР¶РёРІР°РµС‚СЃСЏ Р»Рё С‚Р°Р№РјС„СЂРµР№Рј."""
+    if timeframe == '1d':
+        return True  # Р’СЃРµРіРґР° РїРѕРґРґРµСЂР¶РёРІР°РµС‚СЃСЏ
+    elif timeframe in ['1h', '1m', '5m', '15m']:
+        # РџСЂРѕРІРµСЂСЏРµРј, РµСЃС‚СЊ Р»Рё РґР°РЅРЅС‹Рµ РІ Р‘Р”
+        try:
+            from core.multi_timeframe_db import get_timeframe_data
+            conn = get_connection(self.db_path)
+            # РџСЂРѕРІРµСЂСЏРµРј, СЃСѓС‰РµСЃС‚РІСѓРµС‚ Р»Рё С‚Р°Р±Р»РёС†Р°
+            cursor = conn.cursor()
+            table_name = f"data_{timeframe.replace('m', 'min').replace('h', 'hour')}"
+            cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}'")
+            exists = cursor.fetchone() is not None
+            conn.close()
+            return exists
+        except:
+            return False
+    elif timeframe in ['1s', 'tick']:
+        return False  # РџРѕРєР° РЅРµ СЂРµР°Р»РёР·РѕРІР°РЅРѕ
+    else:
+        return False
+
+
+def get_timeframe_data_summary(self, timeframe: str) -> Dict[str, Any]:
+    """РџРѕР»СѓС‡РёС‚СЊ СЃРІРѕРґРєСѓ РїРѕ РґР°РЅРЅС‹Рј С‚Р°Р№РјС„СЂРµР№РјР°."""
+    try:
+        from core.multi_timeframe_db import get_data_update_stats
+        
+        conn = get_connection(self.db_path)
+        stats_df = get_data_update_stats(conn)
+        conn.close()
+        
+        if stats_df.empty:
+            return {'error': f'No data available for {timeframe}'}
+        
+        # Р¤РёР»СЊС‚СЂСѓРµРј РїРѕ С‚Р°Р№РјС„СЂРµР№РјСѓ
+        timeframe_stats = stats_df[stats_df['timeframe'] == timeframe]
+        
+        if timeframe_stats.empty:
+            return {'error': f'No data available for {timeframe}'}
+        
+        return {
+            'timeframe': timeframe,
+            'total_symbols': len(timeframe_stats),
+            'last_update': timeframe_stats['last_update'].max(),
+            'total_updates': timeframe_stats['update_count'].sum(),
+            'total_errors': timeframe_stats['error_count'].sum(),
+            'success_rate': (timeframe_stats['update_count'].sum() / 
+                           (timeframe_stats['update_count'].sum() + timeframe_stats['error_count'].sum())) * 100
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting timeframe data summary for {timeframe}: {e}")
+        return {'error': str(e)}
