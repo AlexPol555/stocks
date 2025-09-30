@@ -23,7 +23,7 @@ class MLSignalGenerator:
         """Generate comprehensive ML signals for a symbol."""
         try:
             # Get stock data
-            stock_data = self.ml_manager._get_stock_data_from_db(symbol)
+            stock_data = self.ml_manager._get_stock_data_from_db(symbol, '1d')
             if stock_data.empty:
                 return {'error': f'No data available for {symbol}'}
             

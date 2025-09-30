@@ -105,6 +105,13 @@ def calculate_additional_indicators(data: pd.DataFrame, params: IndicatorParamet
     data[STOCH_D_COL] = data[STOCH_K_COL].rolling(window=params.stochastic_signal, min_periods=1).mean()
 
     data["Prev_Close"] = data["close"].shift(1)
+    
+    # Проверяем на None значения перед арифметическими операциями
+    data["high"] = data["high"].fillna(0)
+    data["low"] = data["low"].fillna(0)
+    data["close"] = data["close"].fillna(0)
+    data["Prev_Close"] = data["Prev_Close"].fillna(0)
+    
     data["High_Low"] = data["high"] - data["low"]
     data["High_PrevClose"] = (data["high"] - data["Prev_Close"]).abs()
     data["Low_PrevClose"] = (data["low"] - data["Prev_Close"]).abs()

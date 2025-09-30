@@ -1,6 +1,6 @@
 """
-Fixed Multi-Timeframe Data Management Page.
-Исправленная страница управления многоуровневыми данными.
+Unified Multi-Timeframe Data Management Page.
+Объединенная страница управления многоуровневыми данными с поддержкой акций и фьючерсов.
 """
 
 import streamlit as st
@@ -16,8 +16,9 @@ try:
         EnhancedMultiTimeframeStockAnalyzer, 
         WebSocketDataProvider
     )
-    from core.data_updater_rate_limited import RateLimitedDataUpdater  # Используем rate-limited версию
-    from core.realtime_manager_enhanced import EnhancedRealTimeDataManager  # Используем новый класс
+    from core.data_updater_with_shares import DataUpdaterWithShares  # Используем версию с поддержкой акций
+    from core.realtime_manager_enhanced import EnhancedRealTimeDataManager
+    from core.shares_integration import SharesIntegrator
     MULTI_TIMEFRAME_AVAILABLE = True
 except ImportError as e:
     MULTI_TIMEFRAME_AVAILABLE = False
@@ -34,13 +35,13 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 st.set_page_config(
-    page_title="Multi-Timeframe Data",
+    page_title="Multi-Timeframe Data Management",
     page_icon="⏰",
     layout="wide"
 )
 
 st.title("⏰ Multi-Timeframe Data Management")
-st.caption("Управление данными разных таймфреймов с поддержкой секундных и тиковых данных")
+st.caption("Управление данными разных таймфреймов с поддержкой акций (shares) и фьючерсов (futures)")
 
 # Проверка доступности компонентов
 if not MULTI_TIMEFRAME_AVAILABLE:
@@ -62,17 +63,19 @@ if 'multi_analyzer' not in st.session_state:
     
     if api_key:
         st.session_state.multi_analyzer = EnhancedMultiTimeframeStockAnalyzer(api_key=api_key)
-        st.session_state.data_updater = RateLimitedDataUpdater(api_key, max_requests_per_minute=30)  # Используем rate-limited версию
-        st.session_state.real_time_manager = EnhancedRealTimeDataManager(api_key)  # Используем новый класс
+        st.session_state.data_updater = DataUpdaterWithShares(api_key, max_requests_per_minute=50)
+        st.session_state.real_time_manager = EnhancedRealTimeDataManager(api_key)
+        st.session_state.shares_integrator = SharesIntegrator()
         st.success("✅ API ключ Tinkoff загружен из secrets.toml")
-        st.info("🛡️ Rate limiting включен (30 запросов/мин) для предотвращения блокировки API")
+        st.info("🚀 DataUpdater с поддержкой акций и фьючерсов включен (50 запросов/мин)")
     else:
         st.warning("⚠️ API ключ Tinkoff не найден. Проверьте .streamlit/secrets.toml")
 
 # Создаем вкладки
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📊 Data Overview", 
     "🔄 Data Updater", 
+    "📈 Shares Integration",
     "⚡ Real-Time", 
     "🧠 ML Integration",
     "⚙️ Settings"
@@ -84,7 +87,12 @@ with tab1:
     # Получаем статус всех таймфреймов
     if 'data_updater' in st.session_state:
         updater = st.session_state.data_updater
-        all_status = updater.get_all_timeframe_status()
+        try:
+            all_status = updater.get_all_timeframe_status()
+        except AttributeError as e:
+            st.error(f"❌ Ошибка получения статуса таймфреймов: {e}")
+            st.info("💡 Попробуйте перезапустить страницу")
+            all_status = {}
         
         # Отображаем статус в виде таблицы
         status_data = []
@@ -100,36 +108,52 @@ with tab1:
         
         st.dataframe(pd.DataFrame(status_data), use_container_width=True)
         
+        # Статистика по типам активов
+        st.subheader("📈 Статистика по типам активов")
+        
+        asset_stats = updater.get_asset_statistics()
+        if asset_stats:
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("📊 Акции (shares)", asset_stats.get('shares', 0))
+            
+            with col2:
+                st.metric("📈 Фьючерсы (futures)", asset_stats.get('futures', 0))
+            
+            with col3:
+                st.metric("❓ Неизвестно", asset_stats.get('unknown', 0))
+        
         # Детальная информация по каждому таймфрейму
         st.subheader("🔍 Детальная информация")
         
         selected_timeframe = st.selectbox(
             "Выберите таймфрейм для детального просмотра:",
-            ['1d', '1h', '1m', '5m', '15m', '1s', 'tick']
+            ['1d', '1h', '1m', '5m', '15m']
         )
         
         if selected_timeframe:
-            status = all_status[selected_timeframe]
+            status = all_status.get(selected_timeframe, {})
             
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                st.metric("📊 Записей", status['record_count'])
+                st.metric("📊 Записей", status.get('record_count', 0))
             
             with col2:
-                st.metric("🏷️ Символов", status['symbol_count'])
+                st.metric("🏷️ Символов", status.get('symbol_count', 0))
             
             with col3:
                 st.metric("📅 Последнее обновление", 
-                         status['last_record'][:19] if status['last_record'] else 'Never')
+                         status.get('last_record', 'Never')[:19] if status.get('last_record') else 'Never')
             
             # Показать примеры данных
-            if status['table_exists'] and status['record_count'] > 0:
+            if status.get('table_exists') and status.get('record_count', 0) > 0:
                 st.subheader(f"📋 Пример данных ({selected_timeframe})")
                 
                 try:
                     # Получаем примеры данных из таблицы
-                    table_name = f"data_{selected_timeframe.replace('m', 'min').replace('h', 'hour')}" if selected_timeframe != 'tick' else 'data_tick'
+                    table_name = f"data_{selected_timeframe.replace('m', 'min').replace('h', 'hour')}"
                     
                     from core.database import get_connection
                     conn = get_connection()
@@ -184,9 +208,9 @@ with tab2:
                 st.success("✅ Планировщик остановлен")
                 st.rerun()
     
-    # Rate limiting информация
+    # Статистика обновлений
     stats = updater.get_update_stats()
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.metric("🛡️ Rate Limit Hits", stats.get('rate_limit_hits', 0))
@@ -197,10 +221,28 @@ with tab2:
     with col3:
         st.metric("❌ Ошибок", len(stats.get('errors', {})))
     
+    with col4:
+        st.metric("📈 Процент успеха", 
+                 f"{(stats.get('successful_updates', 0) / max(stats.get('total_symbols', 1), 1)) * 100:.1f}%")
+    
+    # Статистика по типам активов
+    st.subheader("📊 Статистика обновлений по типам активов")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("📊 Акции обновлено", stats.get('shares_updated', 0))
+    
+    with col2:
+        st.metric("📈 Фьючерсы обновлено", stats.get('futures_updated', 0))
+    
+    with col3:
+        st.metric("📊 Всего активов", stats.get('total_symbols', 0))
+    
     # Управление таймфреймами
     st.subheader("⏰ Управление таймфреймами")
     
-    timeframes = ['1d', '1h', '1m', '5m', '15m', '1s', 'tick']
+    timeframes = ['1d', '1h', '1m', '5m', '15m']
     
     # Создаем колонки для каждого таймфрейма
     cols = st.columns(len(timeframes))
@@ -208,17 +250,11 @@ with tab2:
     for i, timeframe in enumerate(timeframes):
         with cols[i]:
             st.write(f"**{timeframe}**")
-            
-            # Показываем статус безопасности
-            if timeframe in ['1s', 'tick']:
-                st.caption("🚫 Отключено")
-                st.caption("(Rate limit)")
-            else:
-                st.caption("✅ Безопасно")
+            st.caption("✅ Включено")
             
             # Кнопка для ручного обновления
-            if st.button(f"🔄 Обновить {timeframe}", key=f"update_{timeframe}", disabled=timeframe in ['1s', 'tick']):
-                with st.spinner(f"Обновление {timeframe} данных..."):
+            if st.button(f"🔄 Обновить {timeframe}", key=f"update_{timeframe}"):
+                with st.spinner(f"Обновление {timeframe} данных для всех активов..."):
                     if timeframe == '1d':
                         updater.update_daily_data()
                     elif timeframe == '1h':
@@ -229,35 +265,120 @@ with tab2:
                         updater.update_5min_data()
                     elif timeframe == '15m':
                         updater.update_15min_data()
-                    elif timeframe == '1s':
-                        updater.update_second_data()
-                    elif timeframe == 'tick':
-                        updater.update_tick_data()
                 
-                st.success(f"✅ {timeframe} данные обновлены")
+                st.success(f"✅ {timeframe} данные обновлены для всех активов")
     
-    # Предупреждение о rate limiting
-    st.warning("""
-    🛡️ **Rate Limiting включен:**
-    - Максимум 30 запросов в минуту
-    - Секундные и тиковые данные отключены для безопасности
+    # Информация об оптимизации
+    st.info("""
+    🚀 **DataUpdater с поддержкой акций и фьючерсов:**
+    - Максимум 50 запросов в минуту
+    - Обработка всех активов батчами по 10
+    - Соблюдение deadline'ов API (500ms для GetCandles)
     - Автоматическое ожидание при достижении лимита
+    - Поддержка акций (shares) и фьючерсов (futures)
     """)
-    
-    # Статистика обновлений
-    st.subheader("📈 Статистика обновлений")
-    
-    if stats['update_count']:
-        st.write("**Количество обновлений:**")
-        for key, count in list(stats['update_count'].items())[:10]:  # Показываем первые 10
-            st.write(f"- {key}: {count}")
-    
-    if stats['errors']:
-        st.write("**Ошибки:**")
-        for key, error in list(stats['errors'].items())[:5]:  # Показываем первые 5 ошибок
-            st.error(f"- {key}: {error}")
 
 with tab3:
+    st.header("📈 Интеграция акций (Shares)")
+    
+    if 'shares_integrator' not in st.session_state:
+        st.error("Shares integrator не инициализирован")
+        st.stop()
+    
+    integrator = st.session_state.shares_integrator
+    
+    # Статистика по типам активов
+    st.subheader("📊 Текущая статистика активов")
+    
+    asset_stats = integrator.get_asset_statistics()
+    if asset_stats:
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("📊 Акции", asset_stats.get('shares', 0))
+        
+        with col2:
+            st.metric("📈 Фьючерсы", asset_stats.get('futures', 0))
+        
+        with col3:
+            st.metric("❓ Неизвестно", asset_stats.get('unknown', 0))
+        
+        with col4:
+            total = sum(asset_stats.values())
+            st.metric("📊 Всего", total)
+    
+    # Кнопки управления интеграцией
+    st.subheader("🔧 Управление интеграцией")
+    
+    # Настройки фильтрации
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        russian_only = st.checkbox(
+            "🇷🇺 Только российские акции", 
+            value=True, 
+            help="Фильтровать только российские акции: INSTRUMENT_STATUS_BASE + RUB валюта + RU ISIN"
+        )
+    
+    with col2:
+        if st.button("🔄 Обновить статистику", key="refresh_stats"):
+            st.rerun()
+    
+    # Кнопка интеграции
+    if st.button("🔄 Интегрировать акции", key="integrate_shares"):
+        with st.spinner("Загрузка акций из Tinkoff API..."):
+            try:
+                integrator.integrate_shares_into_database(st.session_state.tinkoff_api_key, russian_only)
+                if russian_only:
+                    st.success("✅ Российские акции успешно интегрированы!")
+                else:
+                    st.success("✅ Все акции успешно интегрированы!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Ошибка интеграции акций: {e}")
+    
+    # Списки активов
+    st.subheader("📋 Списки активов")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**📊 Акции (shares):**")
+        shares_list = integrator.get_shares_only()
+        if shares_list:
+            st.write(f"Всего акций: {len(shares_list)}")
+            # Показываем первые 20 акций
+            st.write(shares_list[:20])
+            if len(shares_list) > 20:
+                st.write(f"... и еще {len(shares_list) - 20} акций")
+        else:
+            st.info("Акции не загружены. Нажмите 'Интегрировать акции'")
+    
+    with col2:
+        st.write("**📈 Фьючерсы (futures):**")
+        futures_list = integrator.get_futures_only()
+        if futures_list:
+            st.write(f"Всего фьючерсов: {len(futures_list)}")
+            # Показываем первые 20 фьючерсов
+            st.write(futures_list[:20])
+            if len(futures_list) > 20:
+                st.write(f"... и еще {len(futures_list) - 20} фьючерсов")
+        else:
+            st.info("Фьючерсы не найдены")
+    
+    # Информация о интеграции
+    st.info("""
+    💡 **Интеграция акций:**
+    - 🇷🇺 **Фильтрация российских акций** - INSTRUMENT_STATUS_BASE + RUB валюта + RU ISIN
+    - 📊 **Фильтрация по типу акций** - только обыкновенные и привилегированные (не ADR/GDR)
+    - 🏢 Добавляет их в таблицу companies с asset_type = 'shares'
+    - 💾 Сохраняет метаданные: ticker, figi, name, isin, lot_size, currency, share_type
+    - 🔄 Обновляет существующие фьючерсы с asset_type = 'futures'
+    - ✅ Совместимо с существующей системой
+    - 🎯 **Результат**: только российские акции (RUB валюта, RU ISIN)
+    """)
+
+with tab4:
     st.header("⚡ Данные в реальном времени")
     
     if 'real_time_manager' not in st.session_state or st.session_state.real_time_manager is None:
@@ -271,7 +392,7 @@ with tab3:
         - 🌐 WebSocket подключение для тиковых данных
         - ⚡ Секундные данные (1s)
         - 📡 Потоковые обновления
-        - 🎯 Множественные символы
+        - 🎯 Множественные символы (акции + фьючерсы)
         """)
         
         st.info("💡 Пока используйте вкладку 'Data Updater' для получения данных")
@@ -299,18 +420,22 @@ with tab3:
         col1, col2 = st.columns([2, 1])
         
         with col1:
-            available_symbols = st.session_state.multi_analyzer.get_available_symbols()
+            # Получаем списки акций и фьючерсов
+            shares_list = integrator.get_shares_only()
+            futures_list = integrator.get_futures_only()
+            all_assets = shares_list + futures_list
+            
             selected_symbols_rt = st.multiselect(
-                "Выберите символы для мониторинга в реальном времени:",
-                available_symbols,
-                default=available_symbols[:3] if available_symbols else [],
+                "Выберите активы для мониторинга в реальном времени:",
+                all_assets,
+                default=all_assets[:5] if all_assets else [],
                 key="real_time_symbols"
             )
         
         with col2:
             timeframe_rt = st.selectbox(
                 "Выберите таймфрейм:",
-                ['1s', 'tick', 'orderbook'],  # Реальные WebSocket данные
+                ['1s', 'tick', 'orderbook'],
                 key="real_time_timeframe"
             )
         
@@ -320,16 +445,16 @@ with tab3:
         with col1:
             if st.button("▶️ Начать мониторинг", key="start_real_time"):
                 if selected_symbols_rt:
-                    st.info(f"Запуск мониторинга в реальном времени для {len(selected_symbols_rt)} символов...")
+                    st.info(f"Запуск мониторинга в реальном времени для {len(selected_symbols_rt)} активов...")
                     for symbol in selected_symbols_rt:
                         figi = st.session_state.multi_analyzer.get_figi_for_symbol(symbol)
                         if figi:
                             asyncio.run(manager.start_real_time_data(figi, timeframe_rt))
                             st.success(f"✅ Мониторинг для {symbol} запущен.")
                         else:
-                            st.error(f"❌ FIGI не найден для символа {symbol}.")
+                            st.error(f"❌ FIGI не найден для актива {symbol}.")
                 else:
-                    st.warning("Выберите хотя бы один символ для мониторинга.")
+                    st.warning("Выберите хотя бы один актив для мониторинга.")
         
         with col2:
             if st.button("⏹️ Остановить мониторинг", key="stop_real_time"):
@@ -343,7 +468,6 @@ with tab3:
         if selected_symbols_rt:
             latest_data_display = []
             for symbol in selected_symbols_rt:
-                # ИСПРАВЛЕНИЕ: Используем правильный метод без timeframe
                 data = manager.get_latest_data(symbol)
                 if data:
                     latest_data_display.append({
@@ -358,9 +482,9 @@ with tab3:
             else:
                 st.info("Нет данных в реальном времени для отображения.")
         else:
-            st.info("Выберите символы для просмотра данных в реальном времени.")
+            st.info("Выберите активы для просмотра данных в реальном времени.")
 
-with tab4:
+with tab5:
     st.header("🧠 ML интеграция")
     
     if not ML_AVAILABLE:
@@ -375,18 +499,23 @@ with tab4:
     - 🧠 Обучения ML моделей на исторических данных
     - ⚡ Предсказания в реальном времени
     - 🎯 Оптимизации торговых стратегий
+    - 📈 Анализа акций и фьючерсов
     """)
     
     # Показать доступные данные для ML
     if 'data_updater' in st.session_state:
         updater = st.session_state.data_updater
-        ml_data_status = updater.get_all_timeframe_status()
+        try:
+            ml_data_status = updater.get_all_timeframe_status()
+        except AttributeError as e:
+            st.error(f"❌ Ошибка получения статуса для ML: {e}")
+            ml_data_status = {}
         
         st.subheader("📊 Данные доступные для ML")
         
         ml_ready_data = []
         for timeframe, status in ml_data_status.items():
-            if status['record_count'] > 0:
+            if status.get('record_count', 0) > 0:
                 ml_ready_data.append({
                     'Timeframe': timeframe,
                     'Records': status['record_count'],
@@ -401,7 +530,7 @@ with tab4:
         else:
             st.warning("⚠️ Недостаточно данных для ML анализа")
 
-with tab5:
+with tab6:
     st.header("⚙️ Настройки")
     
     st.subheader("🔑 API Настройки")
@@ -435,9 +564,9 @@ with tab5:
         
         st.info("""
         **Текущие настройки Rate Limiting:**
-        - Максимум 30 запросов в минуту
+        - Максимум 50 запросов в минуту
         - Автоматическое ожидание при достижении лимита
-        - Секундные и тиковые данные отключены для безопасности
+        - Поддержка акций и фьючерсов
         """)
     
     st.subheader("📊 Настройки обновления")
@@ -450,8 +579,7 @@ with tab5:
         schedules = updater.update_schedules
         
         for timeframe, schedule_info in schedules.items():
-            status = "🚫 Отключено" if timeframe in ['1s', 'tick'] else "✅ Включено"
-            st.write(f"- **{timeframe}**: {schedule_info['interval']} в {schedule_info['time']} ({status})")
+            st.write(f"- **{timeframe}**: {schedule_info['interval']} в {schedule_info['time']} (✅ Включено)")
     
     st.subheader("🗄️ Управление базой данных")
     
@@ -479,5 +607,7 @@ with tab5:
             'total_updates': sum(stats['update_count'].values()) if stats['update_count'] else 0,
             'total_errors': len(stats['errors']) if stats['errors'] else 0,
             'rate_limit_hits': stats.get('rate_limit_hits', 0),
-            'current_requests_per_minute': stats.get('current_requests_per_minute', 0)
+            'current_requests_per_minute': stats.get('current_requests_per_minute', 0),
+            'shares_updated': stats.get('shares_updated', 0),
+            'futures_updated': stats.get('futures_updated', 0)
         })

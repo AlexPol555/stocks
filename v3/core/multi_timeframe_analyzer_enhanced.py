@@ -59,15 +59,15 @@ class TinkoffDataProvider(DataProvider):
             'tick': None,  # Не поддерживается Tinkoff API напрямую
         }
         
-        # Периоды данных для каждого таймфрейма
+        # Периоды данных для каждого таймфрейма (согласно ограничениям Tinkoff API)
         self.data_periods = {
-            '1d': {'days': 365, 'max_candles': 365},      # 1 год
-            '1h': {'days': 30, 'max_candles': 720},       # 30 дней * 24 часа
-            '1m': {'days': 7, 'max_candles': 10080},      # 7 дней * 24 * 60 минут
-            '5m': {'days': 7, 'max_candles': 2016},       # 7 дней * 24 * 12 пятиминуток
-            '15m': {'days': 7, 'max_candles': 672},       # 7 дней * 24 * 4 пятнадцатиминутки
-            '1s': {'days': 1, 'max_candles': 86400},      # 1 день * 24 * 60 * 60 секунд (экспериментально)
-            'tick': {'days': 0.1, 'max_candles': 100000}, # 0.1 дня (экспериментально)
+            '1d': {'days': 365, 'max_candles': 365},      # 1 день - 1 год
+            '1h': {'days': 7, 'max_candles': 168},        # 1 час - 1 неделя (7 дней)
+            '1m': {'days': 1, 'max_candles': 1440},       # 1 минута - 1 день (24 часа)
+            '5m': {'days': 1, 'max_candles': 288},        # 5 минут - 1 день (24 часа)
+            '15m': {'days': 1, 'max_candles': 96},        # 15 минут - 1 день (24 часа)
+            '1s': {'days': 0.02, 'max_candles': 1728},    # 1 секунда - 30 минут (экспериментально)
+            'tick': {'days': 0.01, 'max_candles': 1000},  # тик - 15 минут (экспериментально)
         }
     
     def get_data(self, symbol: str, timeframe: str) -> pd.DataFrame:
@@ -125,7 +125,55 @@ class TinkoffDataProvider(DataProvider):
                 return data
                 
         except Exception as e:
-            logger.error(f"Error getting {timeframe} data for {symbol}: {e}")
+            error_msg = str(e)
+            if "30014" in error_msg or "maximum request period" in error_msg.lower():
+                logger.warning(f"API period limit exceeded for {symbol} ({timeframe}): {e}")
+                # Пытаемся получить данные за более короткий период
+                return self._get_data_with_shorter_period(symbol, timeframe, interval)
+            else:
+                logger.error(f"Error getting {timeframe} data for {symbol}: {e}")
+            return pd.DataFrame(columns=["time", "open", "close", "high", "low", "volume"])
+    
+    def _get_data_with_shorter_period(self, symbol: str, timeframe: str, interval) -> pd.DataFrame:
+        """Получить данные за более короткий период при ошибке 30014."""
+        try:
+            # Уменьшаем период в 2 раза
+            period_config = self.data_periods.get(timeframe, self.data_periods['1d'])
+            shorter_days = max(1, period_config['days'] / 2)
+            
+            with Client(self.api_key) as client:
+                to_date = datetime.now(timezone.utc)
+                from_date = to_date - timedelta(days=shorter_days)
+                
+                logger.info(f"Trying shorter period for {symbol} ({timeframe}): {shorter_days} days")
+                
+                response = client.market_data.get_candles(
+                    figi=symbol,
+                    from_=from_date,
+                    to=to_date,
+                    interval=interval,
+                )
+                
+                candles = getattr(response, "candles", None) or []
+                if not candles:
+                    logger.warning(f"No candles returned for {symbol} with shorter period")
+                    return pd.DataFrame(columns=["time", "open", "close", "high", "low", "volume"])
+                
+                # Конвертируем в DataFrame
+                data = pd.DataFrame({
+                    "time": [candle.time for candle in candles],
+                    "open": [quotation_to_decimal(candle.open) for candle in candles],
+                    "close": [quotation_to_decimal(candle.close) for candle in candles],
+                    "high": [quotation_to_decimal(candle.high) for candle in candles],
+                    "low": [quotation_to_decimal(candle.low) for candle in candles],
+                    "volume": [candle.volume for candle in candles],
+                })
+                
+                logger.info(f"Retrieved {len(data)} candles for {symbol} ({timeframe}) with shorter period")
+                return data
+                
+        except Exception as e:
+            logger.error(f"Error getting {timeframe} data for {symbol} with shorter period: {e}")
             return pd.DataFrame(columns=["time", "open", "close", "high", "low", "volume"])
     
     def _get_high_frequency_data(self, symbol: str, timeframe: str) -> pd.DataFrame:
@@ -281,7 +329,7 @@ class EnhancedMultiTimeframeStockAnalyzer:
         
         # Маппинг таймфреймов на провайдеры
         self.timeframe_providers = {
-            '1d': [self.base_analyzer] if self.base_analyzer else [],
+            '1d': [self.tinkoff_provider],  # Используем Tinkoff для всех таймфреймов
             '1h': [self.tinkoff_provider],
             '1m': [self.tinkoff_provider],
             '5m': [self.tinkoff_provider],
@@ -295,6 +343,17 @@ class EnhancedMultiTimeframeStockAnalyzer:
         if not figi:
             logger.warning("EnhancedMultiTimeframeStockAnalyzer.get_stock_data called with empty FIGI")
             return pd.DataFrame(columns=["time", "open", "close", "high", "low", "volume"])
+        
+        # Специальная обработка для дневных данных - используем StockAnalyzer как fallback
+        if timeframe == '1d' and self.base_analyzer:
+            try:
+                # Получаем данные через базовый анализатор
+                data = self.base_analyzer.get_stock_data(figi)
+                if not data.empty:
+                    logger.info(f"Retrieved {len(data)} records for {figi} ({timeframe}) via StockAnalyzer")
+                    return data
+            except Exception as e:
+                logger.error(f"Error getting data from StockAnalyzer: {e}")
         
         # Определяем провайдера
         providers = self.timeframe_providers.get(timeframe, [])
@@ -329,11 +388,44 @@ class EnhancedMultiTimeframeStockAnalyzer:
         return results
     
     def get_figi_mapping(self) -> Dict[str, str]:
-        """Получить маппинг тикеров на FIGI."""
-        if self.base_analyzer and hasattr(self.base_analyzer, 'get_figi_mapping'):
-            return self.base_analyzer.get_figi_mapping()
-        else:
-            # Возвращаем базовый маппинг
+        """Получить маппинг тикеров на FIGI из базы данных."""
+        try:
+            from core.database import get_connection
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            # Получаем FIGI коды для акций из базы данных
+            cursor.execute("""
+                SELECT ticker, figi 
+                FROM companies 
+                WHERE asset_type = 'shares' AND figi IS NOT NULL AND figi != ''
+            """)
+            
+            figi_mapping = {row[0]: row[1] for row in cursor.fetchall()}
+            conn.close()
+            
+            if figi_mapping:
+                logger.info(f"Loaded {len(figi_mapping)} FIGI mappings from database")
+                return figi_mapping
+            else:
+                # Возвращаем базовый маппинг, если в БД нет данных
+                logger.warning("No FIGI mappings found in database, using default")
+                return {
+                    'SBER': 'BBG004730N88',
+                    'GAZP': 'BBG004730ZJ9',
+                    'LKOH': 'BBG004731032',
+                    'NVTK': 'BBG00475J7X1',
+                    'ROSN': 'BBG0047315Y7',
+                    'NLMK': 'BBG004RVFFC0',
+                    'ALRS': 'BBG004S681W1',
+                    'MGNT': 'BBG004S68758',
+                    'YNDX': 'BBG006L8G4H1',
+                    'VKCO': 'BBG00QPYJ5X0',
+                }
+                
+        except Exception as e:
+            logger.error(f"Error loading FIGI mappings from database: {e}")
+            # Возвращаем базовый маппинг в случае ошибки
             return {
                 'SBER': 'BBG004730N88',
                 'GAZP': 'BBG004730ZJ9',
@@ -369,9 +461,16 @@ class EnhancedMultiTimeframeStockAnalyzer:
             info[timeframe] = []
             for provider in providers:
                 if provider:
+                    # Проверяем, есть ли метод is_available
+                    if hasattr(provider, 'is_available'):
+                        available = provider.is_available()
+                    else:
+                        # Для StockAnalyzer и других анализаторов без is_available
+                        available = provider is not None
+                    
                     info[timeframe].append({
                         'name': provider.__class__.__name__,
-                        'available': provider.is_available()
+                        'available': available
                     })
         return info
 

@@ -360,6 +360,102 @@ if ML_AVAILABLE:
 else:
     st.info("🤖 ML Analytics: Install ML dependencies to enable AI-powered trading signals.")
 
+# Cascade Analyzer Section
+try:
+    from core.cascade_analyzer import CascadeAnalyzer
+    from core.cascade_notifications import CascadeNotificationManager
+    from core.multi_timeframe_analyzer_enhanced import EnhancedMultiTimeframeStockAnalyzer
+    CASCADE_AVAILABLE = True
+except ImportError as e:
+    CASCADE_AVAILABLE = False
+    st.info("🎯 Cascade Analyzer: Install cascade dependencies to enable multi-timeframe analysis.")
+
+if CASCADE_AVAILABLE:
+    st.subheader("🎯 Cascade Multi-Timeframe Analyzer")
+    
+    # Initialize cascade analyzer if not already done
+    if 'cascade_analyzer' not in st.session_state:
+        try:
+            # Get API key
+            api_key = None
+            if hasattr(st, 'secrets') and hasattr(st.secrets, 'TINKOFF_API_KEY'):
+                api_key = st.secrets.TINKOFF_API_KEY
+            elif 'tinkoff_api_key' in st.session_state:
+                api_key = st.session_state.tinkoff_api_key
+            
+            # Create multi-analyzer
+            multi_analyzer = EnhancedMultiTimeframeStockAnalyzer(api_key=api_key)
+            
+            # Create cascade analyzer
+            st.session_state.cascade_analyzer = CascadeAnalyzer(
+                multi_analyzer=multi_analyzer,
+                ml_manager=st.session_state.get('ml_manager'),
+                demo_trading=demo_trading
+            )
+            
+            # Create notification manager
+            from core.notifications import NotificationManager
+            notification_manager = NotificationManager()
+            st.session_state.cascade_notifications = CascadeNotificationManager(notification_manager)
+            
+            st.success("✅ Cascade Analyzer initialized")
+            
+        except Exception as e:
+            st.error(f"❌ Cascade Analyzer initialization failed: {e}")
+    
+    # Quick cascade analysis section
+    col1, col2, col3 = st.columns([2, 1, 1])
+    
+    with col1:
+        # Get available symbols
+        try:
+            cascade_analyzer = st.session_state.cascade_analyzer
+            available_symbols = cascade_analyzer.multi_analyzer.get_available_symbols()
+            if not available_symbols:
+                available_symbols = ['SBER', 'GAZP', 'LKOH', 'NVTK', 'ROSN']
+        except Exception:
+            available_symbols = ['SBER', 'GAZP', 'LKOH', 'NVTK', 'ROSN']
+        
+        quick_symbols = st.multiselect(
+            "Quick cascade analysis symbols:",
+            available_symbols,
+            default=available_symbols[:3] if available_symbols else [],
+            key="quick_cascade_symbols"
+        )
+    
+    with col2:
+        if st.button("🚀 Quick Cascade", key="quick_cascade_btn"):
+            if quick_symbols:
+                with st.spinner(f"Analyzing {len(quick_symbols)} symbols..."):
+                    try:
+                        import asyncio
+                        results = asyncio.run(cascade_analyzer.analyze_multiple_symbols(quick_symbols))
+                        successful = cascade_analyzer.get_successful_signals(results)
+                        
+                        if successful:
+                            st.success(f"✅ Found {len(successful)} high-quality signals!")
+                            
+                            # Show quick results
+                            for result in successful[:3]:  # Show top 3
+                                st.write(f"**{result.symbol}**: {result.final_signal} @ {result.entry_price:.2f} ₽ (confidence: {result.confidence:.1%})")
+                            
+                            if len(successful) > 3:
+                                st.write(f"... and {len(successful) - 3} more signals")
+                                
+                        else:
+                            st.info("ℹ️ No high-quality signals found in current market conditions")
+                            
+                    except Exception as e:
+                        st.error(f"❌ Cascade analysis failed: {e}")
+            else:
+                st.warning("⚠️ Select symbols for analysis")
+    
+    with col3:
+        if st.button("📊 Full Analysis", key="full_cascade_btn"):
+            st.info("🎯 Redirecting to full Cascade Analyzer page...")
+            # In a real app, this would redirect to the cascade page
+            st.markdown("[Open Full Cascade Analyzer](pages/21_Cascade_Analyzer.py)")
+
 # применяем фильтры
 filtered_df = df_all.copy()
 kpi_df_source = df_all.copy()

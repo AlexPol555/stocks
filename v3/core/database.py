@@ -387,10 +387,9 @@ def load_data_from_db(conn: sqlite3.Connection) -> pd.DataFrame:
     Возвращает объединённые метрики (metrics) с кодом контракта (contract_code).
     """
     query = """
-    SELECT c.contract_code, m.date, m.metric_type, m.value1, m.value2, m.value3, m.value4, m.value5
-    FROM metrics m
-    JOIN companies c ON m.company_id = c.id
-    ORDER BY m.date
+    SELECT d.symbol as contract_code, d.datetime as date, d.open, d.high, d.low, d.close, d.volume
+    FROM data_1d d
+    ORDER BY d.datetime
     """
     try:
         df = pd.read_sql_query(query, conn)

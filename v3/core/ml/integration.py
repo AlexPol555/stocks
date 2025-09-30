@@ -344,38 +344,42 @@ class MLIntegrationManager:
             logger.error(f"Failed to get news data: {e}")
             return pd.DataFrame()
     
-    def _get_stock_data_from_db(self, symbol: str) -> pd.DataFrame:
+    def _get_stock_data_from_db(self, symbol: str, timeframe: str = '1d') -> pd.DataFrame:
         """Get stock data from database for a given symbol."""
         try:
+            print(f"    🔍 [ML_INTEGRATION] {symbol} ({timeframe}): Получаем данные из data_1d...")
             import sqlite3
             from pathlib import Path
             
             db_path = "stock_data.db"
             if not Path(db_path).exists():
+                print(f"    ❌ [ML_INTEGRATION] {symbol} ({timeframe}): База данных не найдена")
                 logger.warning(f"Database file not found: {db_path}")
                 return pd.DataFrame()
             
             conn = sqlite3.connect(db_path)
             
-            # Get stock data
+            # Get stock data from data_1d table
             query = """
                 SELECT 
-                    dd.date,
-                    dd.open,
-                    dd.high,
-                    dd.low,
-                    dd.close,
-                    dd.volume
-                FROM daily_data dd
-                JOIN companies c ON dd.company_id = c.id
-                WHERE c.contract_code = ?
-                ORDER BY dd.date
+                    datetime as date,
+                    open,
+                    high,
+                    low,
+                    close,
+                    volume
+                FROM data_1d
+                WHERE symbol = ?
+                ORDER BY datetime
             """
             
+            print(f"    🔍 [ML_INTEGRATION] {symbol} ({timeframe}): Выполняем SQL запрос...")
             df = pd.read_sql_query(query, conn, params=(symbol,))
+            print(f"    📊 [ML_INTEGRATION] {symbol} ({timeframe}): Получено {len(df)} записей")
             conn.close()
             
             if not df.empty:
+                print(f"    ✅ [ML_INTEGRATION] {symbol} ({timeframe}): Данные получены, обрабатываем...")
                 df['date'] = pd.to_datetime(df['date'])
                 df = df.set_index('date')
                 
@@ -400,39 +404,40 @@ class MLIntegrationManager:
                 bb_std = df['close'].rolling(20).std()
                 df['bb_upper'] = df['bb_middle'] + (bb_std * 2)
                 df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
+                
+                print(f"    ✅ [ML_INTEGRATION] {symbol} ({timeframe}): Данные обработаны, итого {len(df)} записей")
+            else:
+                print(f"    ❌ [ML_INTEGRATION] {symbol} ({timeframe}): Данные пусты")
             
             return df.ffill().fillna(0)
             
         except Exception as e:
+            print(f"    ❌ [ML_INTEGRATION] {symbol} ({timeframe}): Ошибка получения данных - {e}")
             logger.error(f"Failed to get stock data for {symbol}: {e}")
             return pd.DataFrame()
     
     def get_available_tickers(self) -> List[str]:
         """Get list of available tickers from database."""
         try:
+            print("🔍 [ML_INTEGRATION] Получаем доступные тикеры из data_1d...")
             import sqlite3
             from pathlib import Path
             
             db_path = "stock_data.db"
             if not Path(db_path).exists():
+                print("❌ [ML_INTEGRATION] База данных не найдена")
                 logger.warning(f"Database file not found: {db_path}")
                 return []
             
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
             
-            # Check if companies table exists
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='companies'")
-            if not cursor.fetchone():
-                logger.warning("Companies table not found in database")
-                conn.close()
-                return []
-            
-            # Get tickers
-            cursor.execute("SELECT DISTINCT contract_code FROM companies ORDER BY contract_code")
+            # Get tickers from data_1d table
+            cursor.execute("SELECT DISTINCT symbol FROM data_1d ORDER BY symbol")
             tickers = [row[0] for row in cursor.fetchall()]
             
-            logger.info(f"Found {len(tickers)} tickers in database")
+            print(f"📊 [ML_INTEGRATION] Найдено {len(tickers)} тикеров в data_1d")
+            logger.info(f"Found {len(tickers)} tickers in data_1d table")
             conn.close()
             return tickers
                 

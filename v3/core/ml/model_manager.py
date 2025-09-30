@@ -407,25 +407,31 @@ class MLModelManager:
         import sqlite3
         from pathlib import Path
         
+        print(f"    📊 [ML_DATA] Получаем данные для {symbol}...")
+        
         db_path = "stock_data.db"
         if not Path(db_path).exists():
+            print(f"    ❌ [ML_DATA] {symbol}: База данных не найдена")
             return pd.DataFrame()
         
         conn = sqlite3.connect(db_path)
         try:
             # Базовый запрос для дневных данных
             query = """
-                SELECT date, open, high, low, close, volume
-                FROM metrics 
-                WHERE contract_code = ?
-                ORDER BY date DESC
+                SELECT datetime as date, open, high, low, close, volume
+                FROM data_1d 
+                WHERE symbol = ?
+                ORDER BY datetime DESC
                 LIMIT 1000
             """
             
             df = pd.read_sql_query(query, conn, params=(symbol,))
             
             if df.empty:
+                print(f"    ❌ [ML_DATA] {symbol}: Нет данных в таблице data_1d")
                 return df
+            else:
+                print(f"    ✅ [ML_DATA] {symbol}: Найдено {len(df)} записей")
             
             # Конвертируем дату
             df['date'] = pd.to_datetime(df['date'])
@@ -434,9 +440,11 @@ class MLModelManager:
             # Добавляем технические индикаторы
             df = self._add_technical_indicators(df)
             
+            print(f"    ✅ [ML_DATA] {symbol}: Данные обработаны, итого {len(df)} записей")
             return df
             
         except Exception as e:
+            print(f"    ❌ [ML_DATA] {symbol}: Ошибка получения данных - {e}")
             logger.error(f"Error getting stock data for {symbol}: {e}")
             return pd.DataFrame()
         finally:
